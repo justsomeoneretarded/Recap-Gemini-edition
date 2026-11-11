@@ -1,0 +1,154 @@
+name: Generate Shorts
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: Short title
+        required: true
+        type: string
+      source_url:
+        description: Direct HTTPS source footage URL (GitHub Release attachments work)
+        required: true
+        type: string
+      brief:
+        description: Story angle and editing instructions
+        required: true
+        type: string
+      story_notes:
+        description: Verified story context, names, and events to cover
+        required: false
+        type: string
+      narrator:
+        description: Narrator
+        type: choice
+        options: [warguy, kit-laser, female]
+        default: warguy
+      target_seconds:
+        description: Maximum length in seconds (15–180)
+        default: '150'
+        type: string
+      aspect:
+        description: Square matches the reference files; vertical is 9:16
+        type: choice
+        options: [square, vertical]
+        default: square
+      speech_model:
+        description: Chatterbox speech model
+        type: choice
+        options: [original, turbo, nano]
+        default: original
+      writer_model:
+        description: Writer model (Gemma is the writing baseline; Qwen is a smaller legacy option)
+        type: choice
+        options: ['gemma4:12b', 'qwen3:4b-instruct-2507-q4_K_M']
+        default: 'gemma4:12b'
+      source_window:
+        description: Optional source excerpt start,end in seconds (for example 51,73)
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shorts-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    env:
+      HF_HOME: ${{ github.workspace }}/work/huggingface
+      TORCH_HOME: ${{ github.workspace }}/work/torch
+      OLLAMA_MODELS: ${{ github.workspace }}/work/ollama
+      OLLAMA_NUM_PARALLEL: '1'
+      OLLAMA_MAX_LOADED_MODELS: '1'
+      SHORTS_CPU_THREADS: '4'
+      SHORTS_WHISPER_MODEL: base.en
+      SCRIPT_MODEL: ${{ inputs.writer_model || 'gemma4:12b' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install FFmpeg and fonts
+        timeout-minutes: 10
+        run: |
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            echo https://archive.ubuntu.com/ubuntu/ | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
+          fi
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -qq
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends ffmpeg fonts-dejavu-core zstd
+      - name: Validate inputs before model downloads
+        env:
+          SHORTS_INPUTS: ${{ toJSON(inputs) }}
+        run: PYTHONPATH=. python scripts/workflow_request.py
+      - name: Restore footage and visual-analysis cache
+        id: source-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            work/production/sources
+            work/production/index
+            work/production/planning
+            work/production/source-speech
+            work/production/speech
+          key: shorts-source-v1-${{ env.SHORTS_SOURCE_CACHE_KEY }}-${{ github.run_id }}
+          restore-keys: shorts-source-v1-${{ env.SHORTS_SOURCE_CACHE_KEY }}-
+      - name: Install CPU models and pipeline
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch==2.6.0 torchaudio==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install --no-cache-dir -e '.[voice,analysis,source]'
+          python -m pip check
+          python -m pip freeze > work/resolved-environment.txt
+      - name: Start Ollama and prepare models
+        run: |
+          python scripts/install_ollama.py
+          "$RUNNER_TEMP/shorts-ollama/bin/ollama" serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
+          python scripts/prepare_models.py
+      - name: Generate short
+        run: python -m shorts_pipeline generate --request work/request.json --workdir work/production --output output/shorts
+      - name: Save footage and visual-analysis cache
+        if: always() && steps.source-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            work/production/sources
+            work/production/index
+            work/production/planning
+            work/production/source-speech
+            work/production/speech
+          key: shorts-source-v1-${{ env.SHORTS_SOURCE_CACHE_KEY }}-${{ github.run_id }}
+      - name: Upload video and review files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shorts-${{ github.run_number }}
+          path: output/shorts/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload planning diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shorts-diagnostics-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/ollama.log
+            work/resolved-environment.txt
+            work/production/scene-descriptions.json
+            work/production/index/**/index.json
+            work/production/planning/diagnostics/*.json
+            work/production/source-speech/*.json
+          if-no-files-found: ignore
+      - name: Upload rejected speech diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shorts-speech-diagnostics-${{ github.run_number }}
+          path: work/production/speech/diagnostics/
+          if-no-files-found: ignore
+          retention-days: 14

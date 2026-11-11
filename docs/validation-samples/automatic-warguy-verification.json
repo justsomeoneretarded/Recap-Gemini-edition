@@ -1,0 +1,120 @@
+{
+  "result": "succeeded",
+  "mode": "complete automatic GitHub workflow",
+  "github_run": "https://github.com/justsomeoneretarded/Recap-Short-form/actions/runs/42165849180",
+  "code_commit": "55794516af3bc0876cde8a45475272b51e82884b",
+  "source_analysis_cache_from_run": 42163298499,
+  "source_analysis_scope": "Nine representative midpoint descriptions reused from the same immutable source excerpt; fresh Gemma4 writing and original Warguy synthesis/render executed in this run.",
+  "final_sha256": "0ba7fa75cf914e00ddad19eda1c5d6c0405d8a974fbcfeb72dd93636a141baae",
+  "word_count": 37,
+  "script": [
+    "An exhausted John Wick receives a brand-new bulletproof suit to survive his next move.",
+    "The apex predator became a target after breaking the Continental's sacred rules.",
+    "Now a fourteen million dollar bounty is active for his head."
+  ],
+  "pipeline_status": {
+    "state": "succeeded",
+    "stage": "complete",
+    "started_at_epoch": 1793941559.0813732,
+    "elapsed_seconds": 442.87,
+    "duration": 13.920000000000002
+  },
+  "pipeline_qc": {
+    "status": "passed",
+    "duration_seconds": 14.0,
+    "narration_timeline_seconds": 13.920000000000002,
+    "frame_timeline_seconds": 13.933333333333334,
+    "frame_rounding_seconds": 0.013333333333331865,
+    "width": 1080,
+    "height": 1080,
+    "fps": 60,
+    "has_audio": true,
+    "audio_end_seconds": 14.0,
+    "last_voice_endpoint_seconds": 13.926666666666666,
+    "source_audio_bed_policy": "Missing source-bed audio is zero-filled under narration; retained dialogue requires packet coverage.",
+    "captions_burned": true,
+    "loudness_target": {
+      "integrated_lufs": -14,
+      "true_peak_dbfs": -1.5,
+      "range_lu": 9
+    },
+    "input_mix_measurement": {
+      "input_i": "-19.08",
+      "input_tp": "-3.04",
+      "input_lra": "1.90",
+      "input_thresh": "-29.51",
+      "output_i": "-14.57",
+      "output_tp": "-1.50",
+      "output_lra": "2.40",
+      "output_thresh": "-25.00",
+      "normalization_type": "dynamic",
+      "target_offset": "0.57"
+    },
+    "checks": [
+      "source ranges",
+      "speech duration",
+      "footage coverage",
+      "timeline continuity",
+      "output geometry",
+      "output duration",
+      "audio endpoint",
+      "retained dialogue audio coverage"
+    ],
+    "limitations": [
+      "Loudness target applied with measured two-pass normalization; final AAC output is not independently loudness-certified.",
+      "Cover candidates are timeline samples; human review is needed for cover selection."
+    ]
+  },
+  "stream_probe": {
+    "programs": [],
+    "stream_groups": [],
+    "streams": [
+      {
+        "codec_name": "h264",
+        "codec_type": "video",
+        "width": 1080,
+        "height": 1080,
+        "r_frame_rate": "60/1",
+        "avg_frame_rate": "60/1",
+        "duration": "13.933333",
+        "nb_read_frames": "836"
+      },
+      {
+        "codec_name": "aac",
+        "codec_type": "audio",
+        "sample_rate": "48000",
+        "channels": 2,
+        "r_frame_rate": "0/0",
+        "avg_frame_rate": "0/0",
+        "duration": "14.000000",
+        "nb_read_frames": "654"
+      }
+    ],
+    "format": {
+      "duration": "14.000000",
+      "size": "13081512"
+    }
+  },
+  "independent_final_aac_loudness": {
+    "integrated_lufs": -14.13,
+    "true_peak_dbtp": -1.49,
+    "range_lu": 2.5
+  },
+  "limitations": [
+    "Already narrated and captioned reference source causes visible caption overlap and quiet old voiceover in the bed. This is an engineering test, not a channel-ready new recap.",
+    "One 15-second-maximum request was validated; a cold-source 150-second production and broad editorial quality have not been benchmarked.",
+    "Word times are ASR estimates, not forced alignment; voice likeness/delivery has not been subjectively auditioned.",
+    "Script, action framing, pacing, final mix and cover selection require editorial review on clean source footage."
+  ],
+  "independent_editorial_review": {
+    "engineering_consistency": "passed",
+    "preserved_visual_anchors": 9,
+    "script_caption_words": 37,
+    "all_anchor_midpoints_inspected": true,
+    "notes": [
+      "Existing reference captions visibly overlap generated captions.",
+      "The phrase active for his head is awkward; sacred rules is generic. The chronology reset could be clearer.",
+      "No additional factual contradiction was established from the supplied context; this is not a factual or voice-identity certification."
+    ]
+  }
+}

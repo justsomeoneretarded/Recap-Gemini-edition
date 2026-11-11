@@ -1,0 +1,142 @@
+{
+  "result": "succeeded",
+  "mode": "stage-resumed automatic storyboard with real original Chatterbox speech and full render",
+  "source_automatic_github_run": 42163298499,
+  "final": "/workspace/work/shorts-references/automatic-plan8-render/output/final.mp4",
+  "final_sha256": "58f93e216bde8fddb87b9f04648533226f9f282ff284d09502a2fefdf5c165f2",
+  "original_automatic_plan_sha256": "45c33b64f3df5d46285eec398e632cdd4bc6f36e219ae4792f829acf79b3a061",
+  "speech_model": "original",
+  "narrator": "warguy",
+  "original_narration_delivery_and_planning_preserved": true,
+  "shot_validation_normalization": [
+    {
+      "beat": "beat_3",
+      "shot_index": 2,
+      "field": "end",
+      "automatic_original": 19.566667,
+      "validated_local": 19.566016,
+      "delta_seconds": -0.0006509999999977367
+    }
+  ],
+  "word_count": 32,
+  "measured_speech_seconds": 11.16,
+  "beat_durations_seconds": [
+    {
+      "id": "beat_1",
+      "duration": 3.52
+    },
+    {
+      "id": "beat_2",
+      "duration": 4.24
+    },
+    {
+      "id": "beat_3",
+      "duration": 3.4
+    }
+  ],
+  "pipeline_qc": {
+    "status": "passed",
+    "duration_seconds": 11.201,
+    "narration_timeline_seconds": 11.16,
+    "frame_timeline_seconds": 11.183333333333334,
+    "frame_rounding_seconds": 0.023333333333333428,
+    "width": 1080,
+    "height": 1080,
+    "fps": 60,
+    "has_audio": true,
+    "audio_end_seconds": 11.201,
+    "last_voice_endpoint_seconds": 11.183333333333334,
+    "source_audio_bed_policy": "Missing source-bed audio is zero-filled under narration; retained dialogue requires packet coverage.",
+    "captions_burned": true,
+    "loudness_target": {
+      "integrated_lufs": -14,
+      "true_peak_dbfs": -1.5,
+      "range_lu": 9
+    },
+    "input_mix_measurement": {
+      "input_i": "-18.66",
+      "input_tp": "-2.84",
+      "input_lra": "2.20",
+      "input_thresh": "-29.21",
+      "output_i": "-13.93",
+      "output_tp": "-1.50",
+      "output_lra": "1.80",
+      "output_thresh": "-24.42",
+      "normalization_type": "dynamic",
+      "target_offset": "-0.07"
+    },
+    "checks": [
+      "source ranges",
+      "speech duration",
+      "footage coverage",
+      "timeline continuity",
+      "output geometry",
+      "output duration",
+      "audio endpoint",
+      "retained dialogue audio coverage"
+    ],
+    "limitations": [
+      "Loudness target applied with measured two-pass normalization; final AAC output is not independently loudness-certified.",
+      "Cover candidates are timeline samples; human review is needed for cover selection."
+    ]
+  },
+  "stream_probe": {
+    "programs": [],
+    "stream_groups": [],
+    "streams": [
+      {
+        "index": 0,
+        "codec_name": "h264",
+        "codec_type": "video",
+        "width": 1080,
+        "height": 1080,
+        "r_frame_rate": "60/1",
+        "avg_frame_rate": "60/1",
+        "duration": "11.183333",
+        "nb_read_frames": "671"
+      },
+      {
+        "index": 1,
+        "codec_name": "aac",
+        "codec_type": "audio",
+        "sample_rate": "48000",
+        "channels": 2,
+        "r_frame_rate": "0/0",
+        "avg_frame_rate": "0/0",
+        "duration": "11.201000",
+        "nb_read_frames": "525"
+      }
+    ],
+    "format": {
+      "duration": "11.201000",
+      "size": "10604023"
+    }
+  },
+  "independent_final_aac_loudness": {
+    "integrated_lufs": -14.02,
+    "true_peak_dbtp": -1.41,
+    "loudness_range_lu": 1.6,
+    "nominal_true_peak_target_dbtp": -1.5,
+    "exceeds_nominal_true_peak_target_db": 0.09,
+    "raw_measurement": {
+      "input_i": "-14.02",
+      "input_tp": "-1.41",
+      "input_lra": "1.60",
+      "input_thresh": "-24.57",
+      "output_i": "-14.08",
+      "output_tp": "-1.50",
+      "output_lra": "1.50",
+      "output_thresh": "-24.61",
+      "normalization_type": "dynamic",
+      "target_offset": "0.08"
+    }
+  },
+  "speech_rejected_attempts": 0,
+  "speech_verification": "All 32 script words matched using ASR-estimated timings; no forced-alignment or voice-likeness claim.",
+  "limitations": [
+    "The automatic storyboard was generated and accepted in an earlier GitHub run canceled before TTS. This local resume is not proof of one complete automatic workflow.",
+    "Source footage already has captions and voiceover. This is engineering-only output and needs editorial/source review before publication.",
+    "Pipeline QC passes but final encoded AAC true peak measures -1.41 dBTP, 0.09 dB above nominal -1.5 dBTP target. No threshold was changed.",
+    "Original plan retained byte-for-byte; final shot endpoint was automatically clamped by existing validation to local excerpt duration, by 0.651 milliseconds."
+  ]
+}

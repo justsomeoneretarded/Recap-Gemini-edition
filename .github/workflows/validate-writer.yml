@@ -1,0 +1,48 @@
+name: Validate Writer
+
+on:
+  workflow_dispatch:
+    inputs:
+      writer_model:
+        description: Ollama writer to probe against the frozen production case
+        required: true
+        type: string
+        default: 'qwen3.5:4b-q4_K_M'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      OLLAMA_MODELS: ${{ github.workspace }}/work/writer-models
+      OLLAMA_NUM_PARALLEL: '1'
+      OLLAMA_MAX_LOADED_MODELS: '1'
+      WRITER_MODEL: ${{ inputs.writer_model }}
+      SCRIPT_MODEL: ${{ inputs.writer_model }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install lightweight pipeline dependencies
+        run: python -m pip install -e '.'
+      - name: Start pinned CPU Ollama
+        run: |
+          python scripts/install_ollama.py
+          "$RUNNER_TEMP/shorts-ollama/bin/ollama" serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
+      - name: Probe writer and saved-candidate repair
+        run: python -u scripts/validate_writer.py
+      - name: Upload writer probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: writer-probe-${{ github.run_number }}
+          path: |
+            output/writer-probe/
+            ${{ runner.temp }}/ollama.log
+          if-no-files-found: warn
+          retention-days: 14

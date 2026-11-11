@@ -1,0 +1,15 @@
+{
+  "source_id": "V1",
+  "source_sha256": "fac88827c8fc0d6260194c86d4ac8aa102e66ab27affca5efe59ac77b0c5cb16",
+  "nominal_start_seconds": 1.8,
+  "nominal_end_seconds": 4.6,
+  "sample_interval_seconds": 0.1,
+  "caption_band_original_pixels": {
+    "x": 0,
+    "y": 520,
+    "width": 1080,
+    "height": 240
+  },
+  "display_scale": 0.5,
+  "limitations": "Timestamp labels are nominal sampling indexes, not independently retained source PTS. Word reveal and fade are visibly sampled; exact source mask/timing algorithm is unknown."
+}

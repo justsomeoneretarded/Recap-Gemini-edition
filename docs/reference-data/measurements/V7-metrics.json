@@ -1,0 +1,369 @@
+{
+  "id": "V7",
+  "asset_name": "The.next.assassin.is.already.on.his.way.but.this.father.is.ready.movie.film.crime.shorts.4k.-.1080p.h264.mp4",
+  "duration_seconds": 153.848866,
+  "width": 1080,
+  "height": 1080,
+  "frame_rate": "60/1",
+  "frames": 0,
+  "scene_candidates": [
+    {
+      "time": 1.25,
+      "score": 0.457495
+    },
+    {
+      "time": 2.433333,
+      "score": 0.124804
+    },
+    {
+      "time": 3.833333,
+      "score": 0.407807
+    },
+    {
+      "time": 5.633333,
+      "score": 0.395174
+    },
+    {
+      "time": 8.05,
+      "score": 0.196434
+    },
+    {
+      "time": 10.633333,
+      "score": 0.318744
+    },
+    {
+      "time": 12.65,
+      "score": 0.384531
+    },
+    {
+      "time": 15.75,
+      "score": 0.325287
+    },
+    {
+      "time": 19.35,
+      "score": 0.154036
+    },
+    {
+      "time": 20.516667,
+      "score": 0.3725
+    },
+    {
+      "time": 20.533333,
+      "score": 0.205147
+    },
+    {
+      "time": 21.716667,
+      "score": 0.254401
+    },
+    {
+      "time": 21.733333,
+      "score": 0.145604
+    },
+    {
+      "time": 24.316667,
+      "score": 0.259829
+    },
+    {
+      "time": 27.483333,
+      "score": 0.449107
+    },
+    {
+      "time": 27.5,
+      "score": 0.137824
+    },
+    {
+      "time": 30.433333,
+      "score": 0.40519
+    },
+    {
+      "time": 34.35,
+      "score": 0.147261
+    },
+    {
+      "time": 35.966667,
+      "score": 0.133016
+    },
+    {
+      "time": 37.766667,
+      "score": 0.337606
+    },
+    {
+      "time": 39.15,
+      "score": 0.282105
+    },
+    {
+      "time": 42.016667,
+      "score": 0.304694
+    },
+    {
+      "time": 44.1,
+      "score": 0.154504
+    },
+    {
+      "time": 52.333333,
+      "score": 0.233812
+    },
+    {
+      "time": 54.016667,
+      "score": 0.250673
+    },
+    {
+      "time": 55.35,
+      "score": 0.235401
+    },
+    {
+      "time": 56.633333,
+      "score": 0.126617
+    },
+    {
+      "time": 64.733333,
+      "score": 0.133718
+    },
+    {
+      "time": 76.75,
+      "score": 0.461474
+    },
+    {
+      "time": 77.8,
+      "score": 0.173565
+    },
+    {
+      "time": 78.366667,
+      "score": 0.253056
+    },
+    {
+      "time": 78.383333,
+      "score": 0.153599
+    },
+    {
+      "time": 79.1,
+      "score": 0.172323
+    },
+    {
+      "time": 80.05,
+      "score": 0.34776
+    },
+    {
+      "time": 83.8,
+      "score": 0.257201
+    },
+    {
+      "time": 85.616667,
+      "score": 0.210751
+    },
+    {
+      "time": 95.266667,
+      "score": 0.138053
+    },
+    {
+      "time": 95.783333,
+      "score": 0.27698
+    },
+    {
+      "time": 96.45,
+      "score": 0.251233
+    },
+    {
+      "time": 103.35,
+      "score": 0.151118
+    },
+    {
+      "time": 104.35,
+      "score": 0.155014
+    },
+    {
+      "time": 105.25,
+      "score": 0.395717
+    },
+    {
+      "time": 107.183333,
+      "score": 0.151876
+    },
+    {
+      "time": 109.133333,
+      "score": 0.135482
+    },
+    {
+      "time": 110.25,
+      "score": 0.140295
+    },
+    {
+      "time": 116.8,
+      "score": 0.207749
+    },
+    {
+      "time": 120.5,
+      "score": 0.192574
+    },
+    {
+      "time": 129.183333,
+      "score": 0.13878
+    },
+    {
+      "time": 133.816667,
+      "score": 0.208134
+    },
+    {
+      "time": 141.283333,
+      "score": 0.223237
+    },
+    {
+      "time": 143.816667,
+      "score": 0.189746
+    },
+    {
+      "time": 144.683333,
+      "score": 0.231102
+    },
+    {
+      "time": 146.616667,
+      "score": 0.183915
+    },
+    {
+      "time": 150.65,
+      "score": 0.410544
+    },
+    {
+      "time": 151.916667,
+      "score": 0.270248
+    }
+  ],
+  "thresholds": {
+    "0.12": {
+      "candidate_changes": 55,
+      "candidate_changes_per_minute": 21.44962186461615,
+      "times_seconds": [
+        1.25,
+        2.433333,
+        3.833333,
+        5.633333,
+        8.05,
+        10.633333,
+        12.65,
+        15.75,
+        19.35,
+        20.516667,
+        20.533333,
+        21.716667,
+        21.733333,
+        24.316667,
+        27.483333,
+        27.5,
+        30.433333,
+        34.35,
+        35.966667,
+        37.766667,
+        39.15,
+        42.016667,
+        44.1,
+        52.333333,
+        54.016667,
+        55.35,
+        56.633333,
+        64.733333,
+        76.75,
+        77.8,
+        78.366667,
+        78.383333,
+        79.1,
+        80.05,
+        83.8,
+        85.616667,
+        95.266667,
+        95.783333,
+        96.45,
+        103.35,
+        104.35,
+        105.25,
+        107.183333,
+        109.133333,
+        110.25,
+        116.8,
+        120.5,
+        129.183333,
+        133.816667,
+        141.283333,
+        143.816667,
+        144.683333,
+        146.616667,
+        150.65,
+        151.916667
+      ],
+      "interval_median_seconds": 1.8744330000000033,
+      "interval_mean_seconds": 2.7473011785714285,
+      "interval_min_seconds": 0.016665999999986525,
+      "interval_max_seconds": 12.016666999999998
+    },
+    "0.25": {
+      "candidate_changes": 24,
+      "candidate_changes_per_minute": 9.359834995468866,
+      "times_seconds": [
+        1.25,
+        3.833333,
+        5.633333,
+        10.633333,
+        12.65,
+        15.75,
+        20.516667,
+        21.716667,
+        24.316667,
+        27.483333,
+        30.433333,
+        37.766667,
+        39.15,
+        42.016667,
+        54.016667,
+        76.75,
+        78.366667,
+        80.05,
+        83.8,
+        95.783333,
+        96.45,
+        105.25,
+        150.65,
+        151.916667
+      ],
+      "interval_median_seconds": 2.8666669999999996,
+      "interval_mean_seconds": 6.153954639999999,
+      "interval_min_seconds": 0.6666670000000039,
+      "interval_max_seconds": 45.400000000000006
+    }
+  },
+  "integrated_loudness_lufs": -8.6,
+  "loudness_range_lu": 1.2,
+  "true_peak_dbfs": 0.4,
+  "silence_threshold_db": -35,
+  "silence_minimum_seconds": 0.2,
+  "full_mix_silences": [
+    {
+      "start": 0.016665999999999986,
+      "end": 0.233537,
+      "duration": 0.216871
+    }
+  ],
+  "command": [
+    "ffmpeg",
+    "-hide_banner",
+    "-nostats",
+    "-threads",
+    "1",
+    "-filter_threads",
+    "1",
+    "-i",
+    "/workspace/work/shorts-references/media/V7.mp4",
+    "-vf",
+    "scale=270:270,select='gt(scene,0.12)',metadata=print:file=/workspace/work/shorts-references/measurements/V7-scenes-012.txt",
+    "-af",
+    "ebur128=peak=true,silencedetect=noise=-35dB:d=0.2",
+    "-f",
+    "null",
+    "-"
+  ],
+  "runtime_seconds": 51.34,
+  "limitations": [
+    "Scene candidates use FFmpeg scene score on 270x270 frames. Lighting flashes, action and transitions can trigger changes; gradual or visually similar cuts can be missed.",
+    "Intervals are between detector candidates, not manually verified shot durations.",
+    "Loudness and silence are measured on the full mix; music can mask speech pauses. No speaker-isolated measurement or subjective listening was performed.",
+    "Container 60fps does not establish 60 distinct source frames per second."
+  ]
+}

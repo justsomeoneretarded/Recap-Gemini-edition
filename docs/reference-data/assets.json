@@ -1,0 +1,69 @@
+{
+  "release": "https://github.com/justsomeoneretarded/Recap-Short-form/releases/tag/references-v1",
+  "assets": [
+    {
+      "id": "V1",
+      "asset_id": 711315944,
+      "name": "Everyone.Wants.Him.Dead.movie.film.shorts.crime.action.4k.-.1080p.h264.mp4",
+      "url": "https://github.com/justsomeoneretarded/Recap-Short-form/releases/download/references-v1/Everyone.Wants.Him.Dead.movie.film.shorts.crime.action.4k.-.1080p.h264.mp4",
+      "bytes": 57640401,
+      "sha256": "fac88827c8fc0d6260194c86d4ac8aa102e66ab27affca5efe59ac77b0c5cb16"
+    },
+    {
+      "id": "V2",
+      "asset_id": 711278581,
+      "name": "He.s.Not.a.Cop.at.All.-.1080p.h264.mp4",
+      "url": "https://github.com/justsomeoneretarded/Recap-Short-form/releases/download/references-v1/He.s.Not.a.Cop.at.All.-.1080p.h264.mp4",
+      "bytes": 68979853,
+      "sha256": "b2329d5751a26c98ca5296e8f7e36c49fe26a99aafa47af640c566ebfed754a9"
+    },
+    {
+      "id": "V3",
+      "asset_id": 711287363,
+      "name": "He.Was.Hired.to.Kill.Now.He.s.the.Prey.movie.film.shorts.crime.action.4k.-.1080p.h264.mp4",
+      "url": "https://github.com/justsomeoneretarded/Recap-Short-form/releases/download/references-v1/He.Was.Hired.to.Kill.Now.He.s.the.Prey.movie.film.shorts.crime.action.4k.-.1080p.h264.mp4",
+      "bytes": 66805424,
+      "sha256": "68079f279011aa3cade3e032112ad5e77fc6572d5160326a3690c5aee471f180"
+    },
+    {
+      "id": "V4",
+      "asset_id": 711306872,
+      "name": "He.Was.the.Target.All.Along.-.1080p.h264.mp4",
+      "url": "https://github.com/justsomeoneretarded/Recap-Short-form/releases/download/references-v1/He.Was.the.Target.All.Along.-.1080p.h264.mp4",
+      "bytes": 62063815,
+      "sha256": "bac2a435867461532b7ed029bbc0a961f2552a2a5ce3816e7eaa506fd49c15cf"
+    },
+    {
+      "id": "V5",
+      "asset_id": 711321660,
+      "name": "One.Man.vs.the.Deadliest.Fighter.movie.film.shorts.crime.action.4k.-.1080p.h264.mp4",
+      "url": "https://github.com/justsomeoneretarded/Recap-Short-form/releases/download/references-v1/One.Man.vs.the.Deadliest.Fighter.movie.film.shorts.crime.action.4k.-.1080p.h264.mp4",
+      "bytes": 57120237,
+      "sha256": "d0a5626722dab737892344b194b534c689971f94536e159e4223f9dcd0b1ee0f"
+    },
+    {
+      "id": "V6",
+      "asset_id": 711293349,
+      "name": "Rookie.Cop.Just.Learned.the.Hard.Truth.movie.film.crime.action.shorts.4k.-.1080p.h264.mp4",
+      "url": "https://github.com/justsomeoneretarded/Recap-Short-form/releases/download/references-v1/Rookie.Cop.Just.Learned.the.Hard.Truth.movie.film.crime.action.shorts.4k.-.1080p.h264.mp4",
+      "bytes": 62637488,
+      "sha256": "f3bb9887f3f8d25b2aaa1927e5830ab12ccbf288b6a59051b5a750c11c44da96"
+    },
+    {
+      "id": "V7",
+      "asset_id": 711298355,
+      "name": "The.next.assassin.is.already.on.his.way.but.this.father.is.ready.movie.film.crime.shorts.4k.-.1080p.h264.mp4",
+      "url": "https://github.com/justsomeoneretarded/Recap-Short-form/releases/download/references-v1/The.next.assassin.is.already.on.his.way.but.this.father.is.ready.movie.film.crime.shorts.4k.-.1080p.h264.mp4",
+      "bytes": 62408289,
+      "sha256": "f2a1a90f2230c437636c12454c63baec90c97c3b147e6bd5007be1671e24d3d3"
+    },
+    {
+      "id": "V8",
+      "asset_id": 711270432,
+      "name": "The.Quiet.Guy.Was.the.Deadliest.movie.film.shorts.crime.action.4k.-.1080p.h264.mp4",
+      "url": "https://github.com/justsomeoneretarded/Recap-Short-form/releases/download/references-v1/The.Quiet.Guy.Was.the.Deadliest.movie.film.shorts.crime.action.4k.-.1080p.h264.mp4",
+      "bytes": 70334193,
+      "sha256": "abb7062beb0c25022f489ee815d18f07444ec79690004950c92dd5da0d193243"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recap-shorts"
+version = "0.1.0"
+description = "A standalone, evidence-guided movie recap Shorts pipeline"
+requires-python = ">=3.11,<3.13"
+dependencies = ["requests>=2.32,<3", "Pillow>=11,<12", "numpy>=1.26,<2"]
+
+[project.optional-dependencies]
+source = ["yt-dlp[default]>=2026.1.1"]
+analysis = ["scenedetect[opencv]>=0.6.7,<0.7", "faster-whisper>=1.2,<2", "av>=11,<19"]
+voice = ["chatterbox-tts @ git+https://github.com/resemble-ai/chatterbox.git@5de7a54aa4e5e2baadb0182dde554908b48b85c2"]
+test = ["pytest>=8,<9", "PyYAML>=6,<7"]
+
+[project.scripts]
+recap-shorts = "shorts_pipeline.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["shorts_pipeline*"]
+
+[tool.setuptools.package-data]
+shorts_pipeline = ["assets/voices/*.ogg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,11 @@
+{
+  "title": "A quiet arrival turns into a pursuit",
+  "source": "work/source-footage.mp4",
+  "brief": "Start with a visible action. Explain the immediate stakes, build a causal sequence, and finish on an unresolved turn. Keep narration specific to the supplied footage.",
+  "story_notes": "Add verified character names and the scene context here.",
+  "narrator": "warguy",
+  "tts_model": "original",
+  "target_seconds": 150,
+  "aspect": "square",
+  "fps": 60
+}

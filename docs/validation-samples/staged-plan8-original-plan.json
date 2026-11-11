@@ -1,0 +1,108 @@
+{
+  "title": "Validation — the price of protection",
+  "description": "A wounded John Wick receives a new bulletproof suit after breaking a sacred rule, putting a fourteen million dollar bounty on his head.",
+  "source_path": "/home/runner/work/Recap-Short-form/Recap-Short-form/work/production/sources/excerpts/excerpt-c4fc1903e6a77f179134.mp4",
+  "beats": [
+    {
+      "id": "beat_1",
+      "kind": "narration",
+      "text": "An exhausted John Wick receives a brand-new bulletproof suit.",
+      "scene_ids": [
+        "S0001",
+        "S0002",
+        "S0003",
+        "S0004"
+      ],
+      "delivery": "calm",
+      "shots": [
+        {
+          "start": 0.0,
+          "end": 2.1,
+          "focus_x": 0.5
+        },
+        {
+          "start": 2.1,
+          "end": 3.283333,
+          "focus_x": 0.5
+        },
+        {
+          "start": 3.283333,
+          "end": 4.416667,
+          "focus_x": 0.5
+        },
+        {
+          "start": 4.416667,
+          "end": 5.6,
+          "focus_x": 0.5
+        }
+      ]
+    },
+    {
+      "id": "beat_2",
+      "kind": "narration",
+      "text": "The apex predator became a target for breaking the Continental's sacred rules.",
+      "scene_ids": [
+        "S0005",
+        "S0006"
+      ],
+      "delivery": "dramatic",
+      "shots": [
+        {
+          "start": 5.6,
+          "end": 9.733333,
+          "focus_x": 0.5
+        },
+        {
+          "start": 9.733333,
+          "end": 12.95,
+          "focus_x": 0.5
+        }
+      ]
+    },
+    {
+      "id": "beat_3",
+      "kind": "narration",
+      "text": "Now a fourteen million dollar bounty is active on his head.",
+      "scene_ids": [
+        "S0007",
+        "S0008",
+        "S0009"
+      ],
+      "delivery": "dramatic",
+      "shots": [
+        {
+          "start": 12.95,
+          "end": 16.166667,
+          "focus_x": 0.5
+        },
+        {
+          "start": 16.166667,
+          "end": 18.1,
+          "focus_x": 0.5
+        },
+        {
+          "start": 18.1,
+          "end": 19.566667,
+          "focus_x": 0.5
+        }
+      ]
+    }
+  ],
+  "planning": {
+    "version": 9,
+    "script_model": "gemma4:12b",
+    "vision_model": "qwen3-vl:2b-instruct-q4_K_M",
+    "estimated_word_count": 32,
+    "target_seconds": 15.0,
+    "script_words_per_second": 2.0,
+    "maximum_planned_words_per_second": 2.5,
+    "coverage": "All indexed spans described using one midpoint image each; no continuous motion or dialogue analysis.",
+    "grounding": "Model-generated candidate grounded in frame descriptions and user notes; requires editorial review."
+  },
+  "source_origin": "https://github.com/justsomeoneretarded/Recap-Short-form/releases/download/references-v1/Everyone.Wants.Him.Dead.movie.film.shorts.crime.action.4k.-.1080p.h264.mp4",
+  "source_window": [
+    24.24,
+    43.8
+  ],
+  "caption_style": "reference_word_fade"
+}

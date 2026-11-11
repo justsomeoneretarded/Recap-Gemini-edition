@@ -1,0 +1,27 @@
+{
+  "status": "engineering validation passed",
+  "planning_mode": "supplied reviewed storyboard; automatic vision/writer bypassed",
+  "voice_model": "original Chatterbox",
+  "narrator": "warguy",
+  "words": 34,
+  "script": [
+    "Injured, John gets a bulletproof suit before he returns to the streets.",
+    "Earlier, he broke the Continental hotel's rule. Now the bounty on his head reaches fourteen million, and every assassin wants him dead."
+  ],
+  "video_duration_seconds": 11.901,
+  "measured_voice_duration_seconds": 11.879999999999999,
+  "width": 1080,
+  "height": 1080,
+  "fps": 60,
+  "selected_shots_preserved": 9,
+  "aac_integrated_lufs": -14.31,
+  "aac_true_peak_dbfs": -1.4,
+  "final_sha256": "4fddf55173de06c76cb5c65cf70b47da9e1a6a14b3933a6128d41493f3a5fb1b",
+  "limitations": [
+    "Footage is the already narrated reference, not clean film source. Its original captions remain and visibly overlap generated captions.",
+    "Default4%source audio bed retains quiet reference narration.",
+    "The narration and measured source footage passed pipeline QC; voice likeness/delivery has not been subjectively auditioned.",
+    "No claim of a complete automatic source-to-writer run or a publishable new recap."
+  ],
+  "initial_failure": "Original B002 script used fourteen million dollar; small.en represented this as $14 million and omitted literal dollar. Both automatic voice attempts were rejected. Captured WAVs and ASR evidence preserved; wording revised without changing facts or thresholds."
+}
