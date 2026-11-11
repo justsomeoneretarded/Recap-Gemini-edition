@@ -391,20 +391,66 @@ def run_gemini_pipeline(request: dict, source: Path, source_duration: float, wor
     return plan, run
 
 
+RENDER_MIN_FOOTAGE = 0.86  # The renderer may slow footage to 0.85x at most; never hand it less.
+
+
+def _event_footage(run: Run, sentence: dict) -> list[dict]:
+    """Shots covered by a sentence's own verified events: the evidence-backed last resort."""
+    events = {e["id"]: e for e in run.inventory["events"]}
+    shots = []
+    for ident in sentence.get("event_ids", []):
+        event = events.get(ident)
+        if not event:
+            continue
+        for scene in run.scenes:
+            a, b = float(scene["start"]), float(scene["end"])
+            if b > event["start"] and a < event["end"]:
+                shots.append({"shot_id": scene["id"], "start": a, "end": b,
+                              "anchor": round(min(max(float(event.get("peak", (a + b) / 2)), a), b), 3),
+                              "focus_x": event.get("focus_x", 0.5), "shows": event["visible_action"],
+                              "reason": "verified event footage added to cover the measured narration",
+                              "relevance": 0.6, "event_id": ident, "shot_bounds": [a, b],
+                              "fallback_from_event": True})
+    return shots
+
+
 def _finalize_placement(run: Run, beats: list[dict]):
-    """Place footage; any sentence left without footage is removed and the beat re-voiced."""
-    for _ in range(3):
+    """Place footage so every sentence is renderable, or say exactly why not.
+
+    A sentence with no footage, or with less than the renderer can stretch, first
+    gets the shots of its own verified events; if it is still short it is removed
+    and its beat re-voiced. Nothing renders with a known footage shortfall.
+    """
+    extended: set[str] = set()
+    for _ in range(5):
         beats = _drop_unsupported(run, beats)
         if any(b["kind"] == "narration" and not b.get("words") for b in beats):
             beats = run.synthesize(beats)
         beats, evidence, shortfalls = run.place(beats)
-        empty = {e["sentence_id"] for e in evidence if not e["shots"]}
-        if not empty:
+        short = [e for e in evidence
+                 if not e["shots"] or e["footage_seconds"] < e["estimated_seconds"] * RENDER_MIN_FOOTAGE]
+        if not short:
             return beats, evidence, shortfalls
-        for sid in empty:
-            run.matches[sid] = {**run.matches.get(sid, {}), "sentence_id": sid, "verdict": "unsupported", "shots": [],
-                                "problem": "all matched footage was already used by other sentences"}
-    raise ValueError("Footage placement did not converge: sentences kept losing their only supporting shots.")
+        sentences = {s["sentence_id"]: s for b in beats for s in b.get("sentences", [])}
+        for entry in short:
+            sid = entry["sentence_id"]
+            match = run.matches.get(sid, {"sentence_id": sid, "verdict": "unsupported", "shots": []})
+            extra = [] if sid in extended else _event_footage(run, sentences[sid])
+            known = {(sh["start"], sh["end"]) for sh in match.get("shots", [])}
+            extra = [sh for sh in extra if (sh["start"], sh["end"]) not in known]
+            if extra:
+                extended.add(sid)
+                run.matches[sid] = {**match, "shots": list(match.get("shots", [])) + extra}
+                run.record(stage="F", action="event_footage_fallback", sentence_id=sid,
+                           needed=entry["estimated_seconds"], had=entry["footage_seconds"],
+                           added=[sh["shot_id"] for sh in extra], outcome="extended")
+            else:
+                run.matches[sid] = {**match, "sentence_id": sid, "verdict": "unsupported", "shots": [],
+                                    "problem": (f"only {entry['footage_seconds']:.2f}s of usable footage for "
+                                                f"{entry['estimated_seconds']:.2f}s of narration")}
+                run.record(stage="F", action="remove_short_sentence", sentence_id=sid,
+                           needed=entry["estimated_seconds"], had=entry["footage_seconds"], outcome="removed")
+    raise ValueError("Footage placement did not converge: some sentences never had enough verified footage.")
 
 
 def _drop_unsupported(run: Run, beats: list[dict]) -> list[dict]:

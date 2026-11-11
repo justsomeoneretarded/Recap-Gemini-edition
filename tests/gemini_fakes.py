@@ -185,7 +185,7 @@ class FakeTransport:
         return {"events": events}
 
     def _PictureScript(self, parts):
-        text = parts[-1]["text"]
+        text = next(p["text"] for p in parts if p.get("text", "").startswith("Write script A"))
         target = int(re.search(r"Aim for about (\d+) words", text).group(1))
         clips = last_json(text.split("\n", 1)[1])["clips"]
         backbone = clips[:-1] if len(clips) > 2 else clips
@@ -198,7 +198,7 @@ class FakeTransport:
         return {"lines": lines}
 
     def _ReconciledScript(self, parts):
-        text = parts[-1]["text"]
+        text = next(p["text"] for p in parts if p.get("text", "").startswith("Merge the scripts"))
         low, high = map(int, re.search(r"\((\d+)–(\d+) words", text).groups())
         data = last_json(text.split("\n", 1)[1])
         lines = data["script_a"]
