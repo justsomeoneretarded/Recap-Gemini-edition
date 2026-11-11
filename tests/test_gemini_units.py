@@ -396,15 +396,28 @@ def test_zero_free_quota_falls_back_to_the_next_available_model(tmp_path):
         exhausted.generate("review", QualityReview, [text_part("x")], system="s")
 
 
-def test_daily_quota_stops_immediately_and_server_retry_delay_is_honoured(tmp_path):
+def test_daily_quota_switches_model_and_stops_only_when_all_are_used_up(tmp_path):
     from shorts_pipeline.gemini.client import GeminiQuotaExhausted
-    transport = Scripted([FakeAPIError("rate_limit", "Quota exceeded: GenerateRequestsPerDayPerProjectPerModel-FreeTier")])
+    daily = "Quota exceeded: GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+    transport = Scripted([FakeAPIError("rate_limit", daily), REVIEW, REVIEW],
+                         models=["gemini-3.8-flash", "gemini-3.5-flash", "gemini-2.5-flash-lite"])
     client = make_client(tmp_path, transport, gemini_preset="free")
+    client.resolve_models()
+    assert client.generate("review", QualityReview, [text_part("x")], system="s").verdict == "pass"
+    assert client.settings.resolved_models["review"] == "gemini-3.5-flash"
+    assert transport.calls == 2  # No retries are wasted on an exhausted daily quota.
+    # A later run the same Pacific day skips the exhausted model without spending a request on it.
+    again = make_client(tmp_path, Scripted([REVIEW], models=transport.models), gemini_preset="free")
+    again.resolve_models()
+    again.generate("planning", QualityReview, [text_part("y")], system="s")
+    assert again.settings.resolved_models["planning"] == "gemini-3.5-flash" and again.transport.calls == 1
+    only = make_client(tmp_path / "b", Scripted([FakeAPIError("rate_limit", daily)], models=["gemini-2.5-flash-lite"]),
+                       gemini_preset="free")
+    only.resolve_models()
     with pytest.raises(GeminiQuotaExhausted, match="rerun after the quota resets"):
-        client.generate("review", QualityReview, [text_part("x")], system="s")
-    assert transport.calls == 1
+        only.generate("review", QualityReview, [text_part("x")], system="s")
     waits = []
-    client = make_client(tmp_path / "b", Scripted([FakeAPIError("rate_limit", "Please retry in 37.5s."), REVIEW]))
+    client = make_client(tmp_path / "c", Scripted([FakeAPIError("rate_limit", "Please retry in 37.5s."), REVIEW]))
     client.sleep = waits.append
     client.generate("review", QualityReview, [text_part("x")], system="s")
     assert max(waits) >= 38.5

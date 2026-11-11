@@ -465,18 +465,56 @@ class GeminiClient:
         base = stage.split(":")[0]
         while True:
             current = self.settings.resolved_models.get(base) or self.settings.model_preferences[base][0]
+            if current in self._exhausted_today():
+                current = self._switch(base, current, f"{current} already used up its daily quota today")
             try:
                 return self._generate(stage, schema, parts, system=system, model=current, **kwargs)
-            except GeminiModelUnavailable as exc:
-                candidates = list(self.settings.model_preferences[base])
-                later = candidates[candidates.index(current) + 1:] if current in candidates else []
-                usable = [m for m in later if self.available_models is None or m in self.available_models]
-                if not usable:
-                    raise GeminiModelUnavailable(f"{exc} No further {base} model candidates remain "
-                                                 f"({', '.join(candidates)}).") from exc
-                self.settings.resolved_models[base] = usable[0]
-                self.ledger.note(kind="model_substitution", stage=base, preferred=current, used=usable[0],
-                                 reason=str(exc)[:300])
+            except (GeminiModelUnavailable, GeminiQuotaExhausted) as exc:
+                if isinstance(exc, GeminiQuotaExhausted):
+                    self._mark_exhausted(current)
+                self._switch(base, current, str(exc), exc)
+
+    def _switch(self, base: str, current: str, reason: str, exc: Exception | None = None) -> str:
+        """Move a stage to its next usable model candidate (quotas are per model)."""
+        candidates = list(self.settings.model_preferences[base])
+        later = candidates[candidates.index(current) + 1:] if current in candidates else []
+        exhausted = self._exhausted_today()
+        usable = [m for m in later if (self.available_models is None or m in self.available_models)
+                  and m not in exhausted]
+        if not usable:
+            if isinstance(exc, GeminiQuotaExhausted) or current in exhausted:
+                raise GeminiQuotaExhausted(
+                    f"Every {base} model candidate ({', '.join(candidates)}) has used up its daily free-tier "
+                    "quota. Completed stages are cached: rerun after the quota resets (midnight Pacific time) "
+                    "to resume.") from exc
+            raise GeminiModelUnavailable(f"{reason} No further {base} model candidates remain "
+                                         f"({', '.join(candidates)}).") from exc
+        self.settings.resolved_models[base] = usable[0]
+        self.ledger.note(kind="model_substitution", stage=base, preferred=current, used=usable[0], reason=reason[:300])
+        return usable[0]
+
+    @staticmethod
+    def _quota_day() -> str:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/Los_Angeles")).date().isoformat()  # Quotas reset at Pacific midnight.
+
+    def _exhausted_today(self) -> set[str]:
+        path = self.cache_dir / "exhausted-models.json"
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return set()
+        return {m for m, day in data.items() if day == self._quota_day()}
+
+    def _mark_exhausted(self, model: str) -> None:
+        path = self.cache_dir / "exhausted-models.json"
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            data = {}
+        data[model] = self._quota_day()
+        _write_json(path, data)
 
     def _pace(self) -> None:
         if self.settings.max_requests and self.requests_sent >= self.settings.max_requests:
