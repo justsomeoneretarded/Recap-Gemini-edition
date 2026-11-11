@@ -27,7 +27,9 @@ REVIEW_SYSTEM = (
     "(10) the ending makes narrative sense, (11) narration fits the footage, (12) retained dialogue clips are "
     "accurate and meaningful. Report each problem with severity (critical = false or unsupported claim or "
     "wrong footage; major = clear quality defect; minor = polish), the beat/sentence ID, source seconds and a "
-    "fix type. Do not report something as a problem unless you can point to it."
+    "fix type. Do not report something as a problem unless you can point to it. Lines of kind 'context' "
+    "deliberately play over related cover footage: check only that it is related and does not contradict the line. "
+    "For 'action' lines, check that the key_word's action or object is visible in the clip."
 )
 MIN_ACTION_SECONDS = 1.0
 
@@ -91,7 +93,7 @@ def deterministic_checks(beats: list[dict], *, inventory: dict, speech_pool: dic
                 issues.append(_issue("shot_mismatch", "critical", f"'{sentence['text']}' has no supporting footage",
                                      "rematch_shot", beat["id"], sid))
             for shot in placed:
-                if shot.get("relevance", 1) < 0.6:
+                if shot.get("relevance", 1) < 0.6 and not shot.get("cover"):
                     issues.append(_issue("shot_mismatch", "major", f"{shot.get('shot_id')} only partially supports "
                                          f"'{sentence['text']}' (relevance {shot['relevance']:.2f})", "rematch_shot",
                                          beat["id"], sid, shot["start"], shot["end"]))
@@ -161,9 +163,12 @@ def gemini_review(client: GeminiClient, file, beats: list[dict], *, inventory: d
     for number, chunk in enumerate(chunks, 1):
         parts, clips = [], []
         for beat in chunk:
+            sentences = {s["sentence_id"]: s for s in beat.get("sentences", [])}
             for shot in beat.get("shots", [])[:10]:
                 parts.append(video_part(file, shot["start"], shot["end"], fps))
+                line = sentences.get(shot.get("sentence_id", ""), {})
                 clips.append({"clip": len(parts), "beat_id": beat["id"], "sentence_id": shot.get("sentence_id", ""),
+                              "line_kind": line.get("line_kind", "action"), "key_word": line.get("key_word", ""),
                               "source_start": round(shot["start"], 2), "source_end": round(shot["end"], 2),
                               "editor_claims_it_shows": shot.get("shows", "")})
         log(f"Gemini review: chunk {number}/{len(chunks)} ({len(chunk)} beat(s), {len(parts)} clip(s))")
@@ -173,7 +178,7 @@ def gemini_review(client: GeminiClient, file, beats: list[dict], *, inventory: d
                                + "\nBeats under review: " + json.dumps([b["id"] for b in chunk])
                                + "\nFull script for context: " + json.dumps(script, ensure_ascii=False)
                                + "\nEvidence: " + json.dumps(context, ensure_ascii=False))],
-            system=REVIEW_SYSTEM, temperature=0.0, max_output_tokens=8192, resolution="low", thinking="high")
+            system=REVIEW_SYSTEM, temperature=0.0, max_output_tokens=16384, resolution="low", thinking="high")
         summaries.append({"chunk": number, "beats": [b["id"] for b in chunk], "verdict": result.verdict,
                           "scores": {"opening": result.opening_score, "coherence": result.coherence_score,
                                      "ending": result.ending_score}, "strengths": result.strengths})

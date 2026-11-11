@@ -98,7 +98,11 @@ The first number uses published Gemini 2.5 list prices. The second uses delibera
 - **A — Footage understanding:** windowed native video analysis with burned-in timecode, then code checks, then zoom re-inspection of uncertain, fast or important events.
 - **B — Story map:** observed events kept separate from inferences, which must cite their evidence.
 - **C — Editorial selection:** hook, causal chain, dialogue clips and ending mode.
-- **D — Script:** every sentence cites events and states what must be visible, followed by a separate script-review pass.
+- **D — Script (hybrid by default):**
+  - Gemini cuts clips from the chosen events and writes a footage-first script line by line for those clips (Script A).
+  - It also writes a story-first script with context (Script B), followed by a separate review pass.
+  - A merge pass keeps A's lines on their exact clips and adds B's context over unused related cover footage.
+  - Each line's key word is timed to the moment its clip shows the action.
 - **E — Matching:** Gemini watches each sentence's candidate clips and picks in/out points and the action anchor.
 - **F — Shot plan:** deterministic placement with no footage reuse.
 - **G — Sync:** measured Chatterbox audio sets per-sentence cuts; overflow and footage shortfalls trigger targeted rewrites.

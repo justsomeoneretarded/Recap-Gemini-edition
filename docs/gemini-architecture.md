@@ -39,6 +39,25 @@ J  verify.py      measurements of the final MP4 (+ optional Gemini watch of the 
 
 `production_ready` is always `false`. Automated checks are triage, not a substitute for watching the video.
 
+## Hybrid script (default `script_mode: hybrid`)
+
+Story-first writing, followed by a search for footage, can only *approximate* the match between words and picture. The hybrid mode makes that match hold by construction, and still lets the narration carry context the camera never shows.
+
+1. **Clip plan** (`matching:clips`). For each selected event, Gemini watches the candidate shots and cuts 1–3 clips. Each clip has an in/out point, an action anchor, the subject's horizontal position, a role (action/reaction/detail/establishing) and a description of exactly what it shows. Code rejects clips outside their shot, clips under 0.6 s and overlaps. When nothing valid comes back, the verified event timestamps bound a fallback clip, which is flagged for review.
+2. **Script A, picture-first** (`writing:picture`). The narration is written line by line *for* 1–3 consecutive clips. Each line must fit the clips' word capacity at the measured voice rate and name its key word. Code enforces clip order, no reuse, capacity, and that the key word is present.
+3. **Script B, story-first** (`writing:draft` + `planning:script_review`). This is the evidence-referenced script described above, carrying motives, stakes and context.
+4. **Merge** (`writing:reconcile`). A is the backbone. *Action* lines keep A's exact clips, though their wording may be improved and short context folded in. *Context* lines from B play over **unused cover clips**, and each must cite story notes or a story-map inference. Code enforces:
+   - at least 60% of A's lines kept;
+   - context under 35% of the words;
+   - each cover clip used once;
+   - playback order;
+   - every existing script rule (citations, quotes, filler, dangling endings, word budget).
+
+   An invalid merge gets two corrective retries, then the run falls back to Script B with ordinary sentence-to-shot matching, and the fallback is recorded.
+5. **Key-word alignment.** After narration is measured, each action line's key clip gets the time of its key word. The renderer slides that clip's window *within its own shot* so the anchor frame is on screen when the word is spoken. A shot is only marked `key_word_aligned` when its range permits this to within half a frame; otherwise the residual offset is recorded.
+
+The reviewer is told each line's kind: action lines must show their key word's action, and context lines need only related, non-contradicting cover footage.
+
 ## Static vs. agentic video processing
 
 The SDK and models expose two relevant mechanisms: Files API video with per-part `VideoMetadata` clipping and fps, and per-request `media_resolution`. Rather than a single static pass over the whole film, Stage A runs an **agent-style loop under code control**:

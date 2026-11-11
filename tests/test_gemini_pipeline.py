@@ -62,13 +62,34 @@ def test_end_to_end_offline_gemini_run_produces_evidence_linked_short(tmp_path, 
     ranges = sorted((s["start"], s["end"]) for b in timeline["beats"] for s in b["render_shots"])
     assert all(b[0] >= a[1] - 0.25 for a, b in zip(ranges, ranges[1:]))
     cost = json.loads((out / "cost-report.json").read_text())
-    assert {"analysis", "planning:story_map", "planning:editorial", "writing:draft", "matching", "review"} <= set(cost["by_stage"])
+    assert {"analysis", "planning:story_map", "planning:editorial", "writing:draft", "matching:clips",
+            "writing:picture", "writing:reconcile", "review"} <= set(cost["by_stage"])
     assert cost["estimated_total_usd"] > 0 and cost["by_stage"]["analysis"]["models"] == ["gemini-3.8-flash"]
     assert cost["by_stage"]["writing:draft"]["models"] == ["gemini-3.1-pro-preview"]
     verification = json.loads((out / "final-verification.json").read_text())
     assert verification["human_review_required"] is True and verification["checks"]["container"]["width"] == 160
     assert not [i for i in verification["issues"] if i["severity"] == "critical"], verification["issues"]
     assert transport.uploads == 1  # The analysis proxy is uploaded once and reused by every stage.
+    # Hybrid script: picture-first action lines with key words aligned to their clip's action anchor.
+    for name in ("clip-plan.json", "picture-script.json", "script-merged.json"):
+        assert (out / name).is_file(), name
+    sentences = [s for b in timeline["beats"] for s in b.get("sentences", [])]
+    assert {s["line_kind"] for s in sentences} == {"action", "context"}
+    aligned = [r for b in timeline["beats"] for r in b["render_shots"] if r.get("key_word_aligned")]
+    assert aligned
+    for beat in timeline["beats"]:
+        if beat["kind"] != "narration":
+            continue
+        from shorts_pipeline.render import sentence_spans
+        spans = sentence_spans(beat)
+        cursor = beat.get("render_timeline_start", 0)
+        position = 0.0
+        for shot in beat["render_shots"]:
+            if shot.get("key_word_aligned"):
+                on_screen = position + (shot["anchor"] - shot["start"])
+                spoken = spans[shot["sentence_index"]][0] + shot["key_time"]
+                assert abs(on_screen - spoken) <= 1.5 / 30 + 1e-6  # Frame quantization of cut + window.
+            position += shot["duration"]
     script = (out / "script.txt").read_text()
     assert "Hold the line." in script
 
@@ -195,3 +216,15 @@ def test_free_tier_end_to_end_run_is_paced_and_reported_as_unbilled(tmp_path, so
     assert {c["model"] for c in transport.calls} == {"gemini-2.5-flash"}
     settings = json.loads((out / "gemini-settings.json").read_text())
     assert settings["free_tier"] and settings["preflight_estimate"]["estimated_requests"] <= 150
+
+
+def test_invalid_merge_falls_back_to_the_story_first_script(tmp_path, source):
+    bad = {"title": "t", "description": "d", "merge_notes": [], "beats": [{"beat_id": "m", "kind": "narration", "lines": [
+        {"kind": "action", "text": "He runs away from the truck tonight.", "source_line_id": "L99", "clip_ids": ["K001"]}]}]}
+    transport = FakeTransport(events=synthetic_events(30), overrides={"ReconciledScript": bad})
+    out = tmp_path / "out"
+    generate(_request(source), tmp_path / "work", out, gemini_transport=transport, synthesize=FakeSynth())
+    history = json.loads((out / "correction-history.json").read_text())
+    assert any(h.get("stage") == "D2" and h["outcome"] == "fell_back_to_story_script" for h in history)
+    assert any(c["schema"] == "MatchingResult" for c in transport.calls)  # Story-first sentences were matched.
+    assert json.loads((out / "status.json").read_text())["state"] == "succeeded"

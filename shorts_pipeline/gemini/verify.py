@@ -150,7 +150,7 @@ def verify_render(final: Path, timeline: dict, outdir: Path, *, width: int, heig
                     "cuts, audio problems, black/frozen picture, a weak opening or an ending that does not land. "
                     "Give timeline seconds in source_start/source_end.")],
                 system="You are a strict final-QC reviewer of a rendered video. You approve nothing by default.",
-                temperature=0.0, max_output_tokens=4096, resolution="low", thinking="medium")
+                temperature=0.0, max_output_tokens=16384, resolution="low", thinking="medium")
             reviewed = result.model_dump()
             for item in result.issues:
                 issues.append({"check": "gemini_render_review:" + item.check, "severity": item.severity,

@@ -147,9 +147,10 @@ class FakeTransport:
         return {"problems_found": ["none serious"], "changes_made": [], "beats": self._beats(parts, low, high)}
 
     def _BeatRewrite(self, parts):
-        request = last_json(parts[-1]["text"])
+        prompt = next(p["text"] for p in parts if p.get("text", "").startswith("Rewrite only"))
+        request = last_json(prompt)
         beat = request["beat"]
-        limit = re.search(r"at most (\d+) words", parts[-1]["text"])
+        limit = re.search(r"at most (\d+) words", prompt)
         total = int(limit.group(1)) if limit else len(beat["text"].split())
         count = len(beat["sentences"])
         per = max(3, total // count)
@@ -171,6 +172,49 @@ class FakeTransport:
                                        "shows": shot["event_observation"], "reason": "shows the cited action",
                                        "relevance": 0.9}]})
         return {"matches": matches}
+
+    def _ClipPlan(self, parts):
+        listing = last_json(parts[-1]["text"].split("\n", 1)[1])
+        events = []
+        for item in listing:
+            best = max(item["candidate_shots"], key=lambda c: min(c["end"], item["end"]) - max(c["start"], item["start"]))
+            a, b = max(best["start"], item["start"]), min(best["end"], item["end"])
+            events.append({"event_id": item["event_id"], "clips": [
+                {"shot_id": best["shot_id"], "start": a, "end": b, "anchor": (a + b) / 2, "focus_x": 0.4,
+                 "shows": item["observed"], "role": "action", "quality": 0.9}]})
+        return {"events": events}
+
+    def _PictureScript(self, parts):
+        text = parts[-1]["text"]
+        target = int(re.search(r"Aim for about (\d+) words", text).group(1))
+        clips = last_json(text.split("\n", 1)[1])["clips"]
+        backbone = clips[:-1] if len(clips) > 2 else clips
+        per = max(3, round(target * 1.05 / len(backbone)))
+        lines = []
+        for i, clip in enumerate(backbone):
+            words = min(per, max(3, clip["word_capacity"]))
+            line = sentence(words, i)
+            lines.append({"clip_ids": [clip["clip_id"]], "text": line, "key_word": line.split()[1]})
+        return {"lines": lines}
+
+    def _ReconciledScript(self, parts):
+        text = parts[-1]["text"]
+        low, high = map(int, re.search(r"\((\d+)–(\d+) words", text).groups())
+        data = last_json(text.split("\n", 1)[1])
+        lines = data["script_a"]
+        actions = [{"kind": "action", "text": l["text"], "source_line_id": l["line_id"], "clip_ids": l["clip_ids"],
+                    "key_word": l["key_word"], "basis": "observed"} for l in lines]
+        total = sum(len(l["text"].split()) for l in lines)
+        beats = [{"beat_id": "m1", "kind": "narration", "delivery": "dramatic", "lines": actions[:2]}]
+        beats += [{"beat_id": "q", "kind": "dialogue", "speech_id": q} for q in data["approved_dialogue_speech_ids"]]
+        rest = actions[2:]
+        if data["cover_clips"]:
+            cover = data["cover_clips"][0]
+            words = min(max(4, low - total + 2), max(4, cover["word_capacity"]))
+            rest.append({"kind": "context", "text": sentence(words, 7), "clip_ids": [cover["clip_id"]],
+                         "event_ids": [cover["event_id"]], "basis": "inferred_context", "key_word": ""})
+        beats.append({"beat_id": "m2", "kind": "narration", "delivery": "normal", "lines": rest})
+        return {"title": "Synthetic", "description": "merged", "beats": beats, "merge_notes": []}
 
     def _QualityReview(self, parts):
         return {"verdict": "pass", "issues": [], "strengths": ["clear action"], "opening_score": 4,

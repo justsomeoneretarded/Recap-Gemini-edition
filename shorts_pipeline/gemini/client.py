@@ -25,6 +25,7 @@ from pydantic import BaseModel, ValidationError
 from .settings import AUDIO_TOKENS_PER_SECOND, FRAME_TOKENS, GeminiSettings, price_for
 
 CLIENT_VERSION = 1
+MAX_OUTPUT_CEILING = 65536
 
 
 class GeminiError(RuntimeError):
@@ -561,6 +562,11 @@ class GeminiClient:
                 if result.get("finish_reason") in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "RECITATION"):
                     raise GeminiOutputError(f"Gemini blocked the {stage} response ({result['finish_reason']}).")
                 if result.get("finish_reason") == "MAX_TOKENS":
+                    if max_output_tokens < MAX_OUTPUT_CEILING:
+                        # Thinking tokens count toward the limit: give the answer room instead of re-asking.
+                        max_output_tokens = min(MAX_OUTPUT_CEILING, max_output_tokens * 2)
+                        reasons.append(f"truncated: output limit raised to {max_output_tokens}")
+                        continue
                     raise ValueError("response was truncated at the output token limit")
                 parsed = schema.model_validate(json.loads(text))
             except GeminiOutputError:
