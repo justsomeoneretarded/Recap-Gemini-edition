@@ -77,7 +77,8 @@ The job page shows a summary: state, review status, rendered-file checks, and es
 - **Speed:** pacing adds a few minutes. Chatterbox narration on the CPU runner is still the slowest step.
 - **Hitting a limit:**
   - Per-minute limits are retried after the wait the server asks for.
-  - If the **daily** quota runs out, the run stops with a clear message. Finished stages are saved in the Actions cache, so running the same inputs again the next day resumes where it stopped.
+  - Daily quotas are **per model**, and some free models allow only a handful of requests per day. When a model's daily quota runs out, the run switches to the next Flash/Flash-Lite candidate and remembers the exhausted model until the quota resets (midnight Pacific time).
+  - Only when every candidate is used up does the run stop with a clear message. Finished stages are saved in the Actions cache, so running the same inputs again later resumes where it stopped.
   - A model with no free quota is skipped automatically in favour of the next candidate, and the switch is recorded.
 - **Quality:** free-tier quality depends on which Flash model your key can use. Pro-class writing/review models usually need the paid presets.
 
