@@ -52,6 +52,10 @@ class GeminiNoFreeQuota(GeminiModelUnavailable):
     """The key's tier has zero quota for this model (e.g. a Pro model on the free tier)."""
 
 
+class GeminiOverloaded(GeminiModelUnavailable):
+    """The model kept answering 5xx (e.g. 503 high demand) through every retry."""
+
+
 class GeminiTimeout(GeminiError):
     pass
 
@@ -487,8 +491,9 @@ class GeminiClient:
                     f"Every {base} model candidate ({', '.join(candidates)}) has used up its daily free-tier "
                     "quota. Completed stages are cached: rerun after the quota resets (midnight Pacific time) "
                     "to resume.") from exc
-            raise GeminiModelUnavailable(f"{reason} No further {base} model candidates remain "
-                                         f"({', '.join(candidates)}).") from exc
+            error = GeminiOverloaded if isinstance(exc, GeminiOverloaded) else GeminiModelUnavailable
+            raise error(f"{reason} No further {base} model candidates remain "
+                        f"({', '.join(candidates)}). Completed stages are cached; rerun later to resume.") from exc
         self.settings.resolved_models[base] = usable[0]
         self.ledger.note(kind="model_substitution", stage=base, preferred=current, used=usable[0], reason=reason[:300])
         return usable[0]
@@ -533,12 +538,23 @@ class GeminiClient:
                   temperature: float = 0.3, max_output_tokens: int = 8192, resolution: str | None = None,
                   thinking: str | None = "medium", cached_prefix: list[dict] | None = None) -> BaseModel:
         prefix = cached_prefix or []
-        identity = hashlib.sha256(json.dumps({
-            "v": CLIENT_VERSION, "model": model, "system": system, "schema": schema.__name__,
-            "schema_json": schema.model_json_schema(), "parts": self._stable(prefix + parts),
-            "temperature": temperature, "resolution": resolution, "thinking": thinking,
-            "max_output_tokens": max_output_tokens}, sort_keys=True, default=str).encode()).hexdigest()
-        cached_file = self.cache_dir / "responses" / f"{identity}.json"
+        def identity_for(name: str) -> str:
+            return hashlib.sha256(json.dumps({
+                "v": CLIENT_VERSION, "model": name, "system": system, "schema": schema.__name__,
+                "schema_json": schema.model_json_schema(), "parts": self._stable(prefix + parts),
+                "temperature": temperature, "resolution": resolution, "thinking": thinking,
+                "max_output_tokens": max_output_tokens}, sort_keys=True, default=str).encode()).hexdigest()
+
+        identity = identity_for(model)
+        own_file = cached_file = self.cache_dir / "responses" / f"{identity}.json"
+        if not cached_file.is_file():
+            # After a model switch (quota/overload), reuse an identical request already answered
+            # by another candidate for this stage instead of spending a scarce request again.
+            for other in self.settings.model_preferences.get(stage.split(":")[0], ()):
+                alternative = self.cache_dir / "responses" / f"{identity_for(other)}.json"
+                if other != model and alternative.is_file():
+                    cached_file = alternative
+                    break
         if cached_file.is_file():
             saved = json.loads(cached_file.read_text(encoding="utf-8"))
             try:
@@ -590,7 +606,8 @@ class GeminiClient:
                         delay = min(120.0, max(delay, suggested + 1.0))
                     self.sleep(delay)
                     continue
-                failure = {"rate_limit": GeminiRateLimited, "timeout": GeminiTimeout}.get(category, GeminiError)
+                failure = {"rate_limit": GeminiRateLimited, "timeout": GeminiTimeout,
+                           "server": GeminiOverloaded}.get(category, GeminiError)
                 self._record(stage, model, None, started, reasons, error=f"{category}: {message[:300]}")
                 raise failure(f"Gemini {stage} failed after {attempt} attempt(s) ({category}): {message[:500]}") from exc
             self._record(stage, model, result, started, reasons)
@@ -620,7 +637,7 @@ class GeminiClient:
                 feedback = ("Your previous response was not valid for the required JSON schema: "
                             f"{str(exc)[:800]}. Return only corrected JSON that matches the schema.")
                 continue
-            _write_json(cached_file, {"stage": stage, "model": model, "parsed": parsed.model_dump(mode="json")})
+            _write_json(own_file, {"stage": stage, "model": model, "parsed": parsed.model_dump(mode="json")})
             return parsed
 
     def _record(self, stage, model, result, started, reasons, error=None):

@@ -506,3 +506,28 @@ def test_key_word_lands_on_the_action_anchor_frame():
     assert apply_key_times([beat]) == 1 and beat["shots"][0]["key_time"] == pytest.approx(1.2)
     shot = allocate_segmented(beat, 30.0, 25)[0]
     assert shot["key_word_aligned"] and shot["start"] + 1.2 == pytest.approx(14.0)
+
+
+def test_overloaded_model_switches_to_the_next_candidate(tmp_path):
+    from shorts_pipeline.gemini.client import GeminiOverloaded
+    busy = FakeAPIError("server", "503 UNAVAILABLE: This model is currently experiencing high demand.")
+    transport = Scripted([busy] * 7 + [REVIEW], models=["gemini-3.8-flash", "gemini-2.5-flash"])
+    client = make_client(tmp_path, transport, gemini_preset="free")
+    client.resolve_models()
+    assert client.generate("review", QualityReview, [text_part("x")], system="s").verdict == "pass"
+    assert client.settings.resolved_models["review"] == "gemini-2.5-flash"
+    stuck = make_client(tmp_path / "b", Scripted([busy] * 7, models=["gemini-2.5-flash"]), gemini_preset="free")
+    stuck.resolve_models()
+    with pytest.raises(GeminiOverloaded, match="rerun later"):
+        stuck.generate("review", QualityReview, [text_part("x")], system="s")
+
+
+def test_cached_answer_from_another_stage_candidate_is_reused_after_a_switch(tmp_path):
+    first = make_client(tmp_path, Scripted([REVIEW], models=["gemini-3.8-flash", "gemini-2.5-flash"]), gemini_preset="free")
+    first.resolve_models()
+    first.generate("review", QualityReview, [text_part("same request")], system="s")
+    later = make_client(tmp_path, Scripted([], models=["gemini-2.5-flash"]), gemini_preset="free")
+    later.resolve_models()  # 3.8 is gone (e.g. exhausted); the stage now resolves to 2.5-flash.
+    assert later.settings.resolved_models["review"] == "gemini-2.5-flash"
+    assert later.generate("review", QualityReview, [text_part("same request")], system="s").verdict == "pass"
+    assert later.transport.calls == 0 and later.ledger.calls[-1]["response_cache_hit"]
