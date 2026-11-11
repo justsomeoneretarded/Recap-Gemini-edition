@@ -235,7 +235,7 @@ def analyze_footage(client: GeminiClient, source: Path, workdir: Path, scenes: l
             "analysis", WindowAnalysis,
             [video_part(file, window["start"], window["end"], settings["fps"]),
              text_part(_window_prompt(window, scenes, segments, notes))],
-            system=ANALYSIS_SYSTEM, temperature=0.2, max_output_tokens=16384,
+            system=ANALYSIS_SYSTEM, temperature=0.2, max_output_tokens=32768,
             resolution=settings["resolution"], thinking="medium")
         raw = [e.model_dump() for e in result.events]
         shifted = _fix_relative_times(raw, window)
@@ -290,7 +290,7 @@ def verify_events(client: GeminiClient, file, events: list[dict], settings: dict
                                "confirmed / revised (action visible but timing or description needs correction) / "
                                "not_observed. Give corrected source start/end/peak, a concise factual visible_action "
                                "and focus_x of the key subject.\n" + json.dumps(claims))],
-            system=VERIFY_SYSTEM, temperature=0.0, max_output_tokens=4096,
+            system=VERIFY_SYSTEM, temperature=0.0, max_output_tokens=8192,
             resolution=settings["zoom_resolution"], thinking="low")
         for check in result.checks:
             event = by_id.get(check.event_id)

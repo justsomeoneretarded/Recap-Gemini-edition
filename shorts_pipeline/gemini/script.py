@@ -164,7 +164,7 @@ def write_script(client: GeminiClient, inventory: dict, story_map: dict, editori
         return validate_beats(draft.beats, inventory, speech_pool, allowed_quotes=allowed, budget_words=budget_words), draft
 
     (beats, draft), errors = with_repair(client, "writing:draft", ScriptDraft, [text_part(instructions)],
-                                         WRITER_SYSTEM, validate, temperature=0.7, max_output_tokens=8192,
+                                         WRITER_SYSTEM, validate, temperature=0.7, max_output_tokens=32768,
                                          thinking="high", cached_prefix=prefix)
     record = {"title": draft.title, "description": draft.description, "draft_beats": beats,
               "draft_validation_retries": errors}
@@ -179,7 +179,7 @@ def write_script(client: GeminiClient, inventory: dict, story_map: dict, editori
             client, "planning:script_review", ScriptRevision, [text_part(review_prompt)], SCRIPT_REVIEW_SYSTEM,
             lambda r: (validate_beats(r.beats, inventory, speech_pool, allowed_quotes=allowed,
                                       budget_words=budget_words), r),
-            temperature=0.4, max_output_tokens=8192, thinking="high", cached_prefix=prefix)
+            temperature=0.4, max_output_tokens=32768, thinking="high", cached_prefix=prefix)
         record.update(beats=reviewed, review={"problems_found": revision.problems_found,
                                               "changes_made": revision.changes_made,
                                               "validation_retries": review_errors, "applied": True})
@@ -221,7 +221,7 @@ def rewrite_beat(client: GeminiClient, beat: dict, reason: str, inventory: dict,
         return normalized, result.rationale
 
     (normalized, rationale), _ = with_repair(client, "writing:rewrite", BeatRewrite, [text_part(prompt)],
-                                             WRITER_SYSTEM, validate, temperature=0.5, max_output_tokens=4096,
+                                             WRITER_SYSTEM, validate, temperature=0.5, max_output_tokens=16384,
                                              thinking="medium",
                                              cached_prefix=evidence_parts(inventory, speech_pool, request))
     ident = beat["id"]

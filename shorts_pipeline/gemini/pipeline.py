@@ -16,8 +16,9 @@ from pathlib import Path
 from typing import Callable
 
 from .analysis import analyze_footage
-from .client import BudgetExceeded, CostLedger, GeminiClient, _write_json
+from .client import BudgetExceeded, CostLedger, GeminiClient, GeminiOutputError, _write_json
 from .matching import match_sentences, plan_shots
+from .picture import apply_key_times, build_hybrid
 from .review import deterministic_checks, gemini_review, summarize
 from .script import count_words, rewrite_beat, write_script
 from .settings import ANALYSIS_QUALITY, FRAME_TOKENS, GeminiSettings, planning_rate, price_for, settings_from_request
@@ -145,7 +146,10 @@ class Run:
     def place(self, beats: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
         measured = measured_sentence_seconds(beats) if all(
             b.get("words") for b in beats if b["kind"] == "narration") else None
-        return plan_shots(beats, self.matches, self.rate, measured=measured)
+        beats, evidence, shortfalls = plan_shots(beats, self.matches, self.rate, measured=measured)
+        if measured is not None:
+            apply_key_times(beats)  # Key word ↔ action anchor, from measured word timings.
+        return beats, evidence, shortfalls
 
     def rematch(self, beats: list[dict], sentence_ids: set[str], *, wide: bool = False, exclude: dict | None = None):
         self.matches.update(match_sentences(self.client, self.ensure_file(), beats, self.inventory, self.scenes,
@@ -309,11 +313,34 @@ def run_gemini_pipeline(request: dict, source: Path, source_duration: float, wor
         lambda: write_script(run.client, run.inventory, run.story_map, run.editorial, run.speech_pool, request,
                              budget_words), "script-draft.json")
     beats = copy.deepcopy(script["beats"])
-    # E — sentence-to-shot matching
+    hybrid = None
+    if request.get("script_mode", "hybrid") == "hybrid":
+        # D2/E1 — picture-first backbone + story-first context, reconciled (see picture.py).
+        try:
+            hybrid = run.checkpoint(
+                "D2-hybrid", [script, run.editorial, budget_words, models["matching"], models["writing"]],
+                lambda: build_hybrid(run.client, run.ensure_file(), story_script=script, editorial=run.editorial,
+                                     story_map=run.story_map, inventory=run.inventory, scenes=scenes,
+                                     speech_pool=run.speech_pool, request=request, rate=run.rate,
+                                     budget_words=budget_words, log=log))
+            for name, key in (("clip-plan.json", "clip_plan"), ("picture-script.json", "picture_script")):
+                _write_json(outdir / name, hybrid[key])
+            _write_json(outdir / "script-merged.json", {"beats": hybrid["beats"],
+                                                        "validation_retries": hybrid["validation_retries"]})
+            beats = copy.deepcopy(hybrid["beats"])
+            run.matches = copy.deepcopy(hybrid["matches"])
+            run.record(stage="D2", action="hybrid_script", outcome="accepted",
+                       lines=sum(len(b.get("sentences", [])) for b in beats))
+        except (ValueError, GeminiOutputError) as exc:
+            hybrid = None
+            run.record(stage="D2", action="hybrid_script", outcome="fell_back_to_story_script", error=str(exc)[:500])
+            log(f"Gemini: hybrid script rejected ({str(exc)[:160]}); using the story-first script")
+    # E — sentence-to-shot matching (story-first script, or hybrid fallback)
     script_key = _key(beats)
-    run.matches = run.checkpoint(
-        "E-matches", [script_key, models["matching"], settings.analysis["match_fps"]],
-        lambda: match_sentences(run.client, run.ensure_file(), beats, run.inventory, scenes, log=log))
+    if hybrid is None:
+        run.matches = run.checkpoint(
+            "E-matches", [script_key, models["matching"], settings.analysis["match_fps"]],
+            lambda: match_sentences(run.client, run.ensure_file(), beats, run.inventory, scenes, log=log))
     # Unsupported sentences: one wide search, then a rewrite, then removal.
     unsupported = {sid for sid, m in run.matches.items() if not m["shots"]}
     if unsupported:

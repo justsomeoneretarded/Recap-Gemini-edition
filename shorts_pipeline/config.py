@@ -7,7 +7,7 @@ DEFAULTS = {'brief': '', 'story_notes': '', 'narrator': 'warguy', 'tts_model': '
             'ollama_url': 'http://127.0.0.1:11434', 'max_scenes': 120,
             'auto_source_speech': True, 'caption_style': 'reference_word_fade',
             'planner': 'gemini', 'gemini_preset': 'free', 'fallback_writer': 'none',
-            'forced_alignment': 'off'}
+            'forced_alignment': 'off', 'script_mode': 'hybrid'}
 LOCAL_WRITERS = ('gemma4:12b', 'qwen3:4b-instruct-2507-q4_K_M')
 
 
@@ -45,6 +45,8 @@ def request_config(data: dict) -> dict:
         raise ValueError('planner must be gemini or local.')
     if result['fallback_writer'] not in ('none',)+LOCAL_WRITERS:
         raise ValueError(f'fallback_writer must be none or one of {", ".join(LOCAL_WRITERS)}.')
+    if result['script_mode'] not in ('hybrid','story'):
+        raise ValueError('script_mode must be hybrid or story.')
     if result['forced_alignment'] not in ('off','auto'):
         raise ValueError('forced_alignment must be off or auto.')
     if result['planner']=='gemini':

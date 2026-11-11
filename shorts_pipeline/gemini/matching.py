@@ -167,7 +167,7 @@ def match_sentences(client: GeminiClient, file, beats: list[dict], inventory: di
                                "subject, what it shows, the reason it fits, and relevance (1 = shows exactly the "
                                "narrated action). Order shots as they should play.\n"
                                + json.dumps(listing, ensure_ascii=False))],
-            system=MATCH_SYSTEM, temperature=0.1, max_output_tokens=8192,
+            system=MATCH_SYSTEM, temperature=0.1, max_output_tokens=16384,
             resolution="low", thinking="medium")
         returned = {m.sentence_id: m.model_dump() for m in result.matches}
         for sentence, cands in batch:
@@ -205,7 +205,7 @@ def plan_shots(beats: list[dict], matches: dict, rate: float, *, measured: dict 
             need = measured.get(sid, words / rate + 0.15)
             want = need * FOOTAGE_HEADROOM
             chosen, total, notes = [], 0.0, []
-            for choice in sorted(match["shots"], key=lambda c: -c["relevance"]):
+            for choice in sorted(match["shots"], key=lambda c: (-c.get("priority", 0), -c["relevance"])):
                 a, b = choice["start"], choice["end"]
                 for ua, ub, owner in used:
                     if _overlap((a, b), (ua, ub)) > 0.25:
@@ -259,7 +259,8 @@ def plan_shots(beats: list[dict], matches: dict, rate: float, *, measured: dict 
             placed = [{"start": round(c["start"], 3), "end": round(c["end"], 3), "focus_x": c["focus_x"],
                        "anchor": c["anchor"], "sentence_index": index, "sentence_id": sid, "shot_id": c["shot_id"],
                        "event_id": c["event_id"], "shows": c["shows"], "reason": c["reason"],
-                       "relevance": c["relevance"], "shot_bounds": c["shot_bounds"]} for c in chosen]
+                       "relevance": c["relevance"], "shot_bounds": c["shot_bounds"],
+                       **{k: c[k] for k in ("clip_id", "cover", "key_clip") if k in c}} for c in chosen]
             shots += placed
             entry = {"sentence_id": sid, "beat_id": beat["id"], "text": sentence["text"],
                      "event_ids": sentence["event_ids"], "visual_requirement": sentence.get("visual_requirement", ""),

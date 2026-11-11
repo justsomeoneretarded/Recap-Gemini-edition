@@ -210,3 +210,59 @@ class QualityReview(BaseModel):
     opening_score: int = Field(3, ge=1, le=5)
     coherence_score: int = Field(3, ge=1, le=5)
     ending_score: int = Field(3, ge=1, le=5)
+
+
+# ---------------------------------------------------------------- Hybrid: picture-first
+class ClipChoice(BaseModel):
+    shot_id: str
+    start: float
+    end: float
+    anchor: float = Field(description="Source second where the event's key action is clearest.")
+    focus_x: float = Field(0.5, ge=0, le=1)
+    shows: str = Field(description="Concrete description of exactly what this clip shows.")
+    role: Literal["action", "reaction", "detail", "establishing"] = "action"
+    quality: float = Field(ge=0, le=1, description="How clearly and strikingly the clip shows its content.")
+
+
+class EventClips(BaseModel):
+    event_id: str
+    clips: list[ClipChoice]
+
+
+class ClipPlan(BaseModel):
+    events: list[EventClips]
+
+
+class PictureLine(BaseModel):
+    clip_ids: list[str] = Field(description="1-3 consecutive clip IDs this line plays over.")
+    text: str
+    key_word: str = Field(description="The word naming the action/object the anchor frame shows.")
+
+
+class PictureScript(BaseModel):
+    lines: list[PictureLine]
+
+
+class FinalLine(BaseModel):
+    kind: Literal["action", "context"]
+    text: str
+    source_line_id: str = Field("", description="For action lines: the footage-first line ID it is based on.")
+    clip_ids: list[str] = Field(description="Action: exactly the source line's clips. Context: unused cover clips.")
+    key_word: str = ""
+    event_ids: list[str] = []
+    basis: Literal["observed", "story_notes", "inferred_context", "dialogue"] = "observed"
+
+
+class ReconciledBeat(BaseModel):
+    beat_id: str
+    kind: Literal["narration", "dialogue"]
+    delivery: Delivery = "normal"
+    speech_id: str = ""
+    lines: list[FinalLine] = []
+
+
+class ReconciledScript(BaseModel):
+    title: str
+    description: str
+    beats: list[ReconciledBeat]
+    merge_notes: list[str] = []

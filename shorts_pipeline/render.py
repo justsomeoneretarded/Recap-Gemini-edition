@@ -202,8 +202,29 @@ def allocate_segmented(beat: dict, source_duration: float, fps: int) -> list[dic
             raise ValueError(f"Beat {beat.get('id')} sentence {index+1} has no matched footage")
         if frames <= 0:
             raise ValueError(f"Beat {beat.get('id')} sentence {index+1} is shorter than one frame")
-        allocated += allocate_shots(shots, frames / fps, source_duration, fps)
+        placed = allocate_shots(shots, frames / fps, source_duration, fps)
+        _align_key_word(placed)
+        allocated += placed
     return allocated
+
+
+def _align_key_word(shots: list[dict]) -> None:
+    """Slide a key clip's window, inside its own source range, so its action
+    anchor appears on screen when the sentence's key word is spoken."""
+    position = 0.
+    for shot in shots:
+        key_time, anchor = shot.get("key_time"), shot.get("anchor")
+        if key_time is not None and anchor is not None and shot["speed"] >= 1 - 1e-9:
+            offset_in_shot = _number(key_time, "key_time") - position
+            if 0 <= offset_in_shot <= shot["duration"]:
+                span = shot["end"] - shot["start"]
+                wanted = _number(anchor, "Shot anchor") - offset_in_shot
+                start = min(max(wanted, shot["source_start"]), shot["source_end"] - span)
+                frame = shot["duration"] / max(1, shot["frames"])
+                # Only claim alignment when the shot's own range allowed it (within half a frame).
+                shot.update(start=start, end=start + span, key_word_aligned=abs(start - wanted) <= frame / 2,
+                            key_word_offset_seconds=round(start - wanted, 3))
+        position += shot["duration"]
 
 
 def crop_filter(width: int, height: int, focus_x: float = .5) -> str:

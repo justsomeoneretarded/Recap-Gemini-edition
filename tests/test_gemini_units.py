@@ -408,3 +408,88 @@ def test_daily_quota_stops_immediately_and_server_retry_delay_is_honoured(tmp_pa
     client.sleep = waits.append
     client.generate("review", QualityReview, [text_part("x")], system="s")
     assert max(waits) >= 38.5
+
+
+def test_truncated_output_gets_more_room_instead_of_a_repair_prompt(tmp_path):
+    class Truncating(Scripted):
+        def generate(self, model, parts, **kwargs):
+            self.calls += 1
+            self.limits = getattr(self, "limits", []) + [kwargs["max_output_tokens"]]
+            finish = "MAX_TOKENS" if self.calls == 1 else "STOP"
+            return {"text": "{" if finish == "MAX_TOKENS" else json.dumps(REVIEW), "finish_reason": finish,
+                    "prompt_tokens": 10, "cached_tokens": 0, "output_tokens": 8192, "thinking_tokens": 0, "audio_tokens": 0}
+    transport = Truncating()
+    client = make_client(tmp_path, transport)
+    assert client.generate("review", QualityReview, [text_part("x")], system="s", max_output_tokens=8192).verdict == "pass"
+    assert transport.limits == [8192, 16384]
+    assert not any("Your previous response" in str(p) for p in transport.limits)
+
+
+CLIPS = [{"clip_id": f"K{i:03d}", "event_id": f"EV000{i}", "seconds": 4.0, "shot_id": f"S{i}", "start": i * 6.0,
+          "end": i * 6.0 + 4, "anchor": i * 6.0 + 2, "focus_x": 0.5, "shows": "he lifts a rifle", "role": "action",
+          "quality": 0.9, "shot_bounds": [i * 6.0, i * 6.0 + 6]} for i in (1, 2, 3)]
+
+
+def test_picture_script_validation_enforces_clip_order_capacity_and_key_word():
+    from shorts_pipeline.gemini.picture import validate_picture
+    from shorts_pipeline.gemini.schemas import PictureScript
+    ok = PictureScript(lines=[{"clip_ids": ["K001"], "text": "He lifts the rifle from the crate.", "key_word": "rifle"},
+                              {"clip_ids": ["K002"], "text": "Then he aims it at the door.", "key_word": "aims"}])
+    lines = validate_picture(ok, CLIPS, rate=2.5, budget_high=20)
+    assert [l["line_id"] for l in lines] == ["L01", "L02"] and lines[0]["event_ids"] == ["EV0001"]
+    bad = [([{"clip_ids": ["K001", "K003"], "text": "He lifts the rifle.", "key_word": "rifle"}], "not consecutive"),
+           ([{"clip_ids": ["K002"], "text": "Then he aims carefully.", "key_word": "aims"},
+             {"clip_ids": ["K001"], "text": "He lifts the rifle.", "key_word": "rifle"}], "goes back"),
+           ([{"clip_ids": ["K001"], "text": "He lifts the heavy rifle from the old wooden crate in the dark barn.",
+              "key_word": "rifle"}], "fit"),
+           ([{"clip_ids": ["K001"], "text": "He lifts the rifle.", "key_word": "truck"}], "key_word"),
+           ([{"clip_ids": ["K009"], "text": "He lifts the rifle.", "key_word": "rifle"}], "known clip")]
+    for lines_, message in bad:
+        with pytest.raises(ValueError, match=message):
+            validate_picture(PictureScript(lines=lines_), CLIPS, rate=2.5, budget_high=10)
+
+
+def test_merge_keeps_action_clips_and_limits_context():
+    from shorts_pipeline.gemini.picture import validate_reconciled
+    from shorts_pipeline.gemini.schemas import ReconciledScript
+    a_lines = [{"line_id": "L01", "clip_ids": ["K001"], "text": "He lifts the rifle.", "key_word": "rifle",
+                "event_ids": ["EV0001"]},
+               {"line_id": "L02", "clip_ids": ["K002"], "text": "He aims at the door.", "key_word": "aims",
+                "event_ids": ["EV0002"]}]
+    story_map = {"events": [{"event_id": "EV0003", "inferred_context": [{"claim": "x"}]}]}
+    kwargs = dict(lines=a_lines, clips=CLIPS, story_map=story_map, inventory=INVENTORY, speech_pool=POOL,
+                  allowed_quotes=[], notes="", rate=2.5, budget_words=None)
+
+    def merged(*lines):
+        return ReconciledScript(title="t", description="d", beats=[{"beat_id": "b", "kind": "narration", "lines": list(lines)}])
+    action1 = {"kind": "action", "text": "He lifts the rifle from the crate.", "source_line_id": "L01", "clip_ids": ["K001"], "key_word": "rifle"}
+    action2 = {"kind": "action", "text": "Then he aims at the door.", "source_line_id": "L02", "clip_ids": ["K002"], "key_word": "aims"}
+    context = {"kind": "context", "text": "The truck waits outside.", "clip_ids": ["K003"], "event_ids": ["EV0003"],
+               "basis": "inferred_context"}
+    beats, matches = validate_reconciled(merged(action1, action2, context), **kwargs)
+    kinds = [s["line_kind"] for s in beats[0]["sentences"]]
+    assert kinds == ["action", "action", "context"]
+    assert matches["N01.1"]["shots"][0]["key_clip"] and matches["N01.3"]["shots"][0]["cover"]
+    cases = [((dict(action1, clip_ids=["K002"]), action2), "keep its clips"),
+             ((action1, dict(context, clip_ids=["K001"]), action2), "unused cover clips"),
+             ((action1, dict(context, basis="story_notes"), action2), "no"),
+             ((action1, dict(context, event_ids=["EV0001"]), action2), "inferred_context without"),
+             ((action1,), "backbone"),
+             ((action1, dict(action2, text="He waits by the window."), ), "key word"),
+             ((dict(action1, text="He lifts the rifle."), dict(action2, text="Then he aims."),
+               dict(context, text="The old truck waits outside the barn tonight.")), "action-led")]
+    for lines, message in cases:
+        with pytest.raises(ValueError, match=message):
+            validate_reconciled(merged(*lines), **kwargs)
+
+
+def test_key_word_lands_on_the_action_anchor_frame():
+    beat = {"id": "N01", "duration": 3.0, "sentences": [{"text": "He grabs the rifle.", "key_word": "rifle"}],
+            "words": [{"word": "He", "start": 0.1, "end": 0.3}, {"word": "grabs", "start": 0.35, "end": 0.7},
+                      {"word": "the", "start": 0.75, "end": 0.9}, {"word": "rifle.", "start": 1.2, "end": 1.8}],
+            "shots": [{"start": 10.0, "end": 16.0, "anchor": 14.0, "sentence_index": 0, "key_clip": True}]}
+    from shorts_pipeline.gemini.picture import apply_key_times
+    beat["kind"] = "narration"
+    assert apply_key_times([beat]) == 1 and beat["shots"][0]["key_time"] == pytest.approx(1.2)
+    shot = allocate_segmented(beat, 30.0, 25)[0]
+    assert shot["key_word_aligned"] and shot["start"] + 1.2 == pytest.approx(14.0)

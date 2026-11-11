@@ -140,7 +140,7 @@ def build_story_map(client: GeminiClient, inventory: dict, speech_pool: dict, re
         "importance for a recap, and any inferred context with basis and supporting events. List open questions "
         "the footage leaves unresolved.")]
     result = client.generate("planning:story_map", StoryMap, parts, system=STORY_SYSTEM, temperature=0.2,
-                             max_output_tokens=16384, thinking="medium",
+                             max_output_tokens=32768, thinking="medium",
                              cached_prefix=evidence_parts(inventory, speech_pool, request))
     return normalize_story_map(result, inventory, request.get("story_notes", ""), transcript)
 
@@ -209,7 +209,7 @@ def plan_editorial(client: GeminiClient, inventory: dict, story_map: dict, speec
     result, errors = with_repair(
         client, "planning:editorial", EditorialPlan, parts, EDITOR_SYSTEM,
         lambda r: validate_editorial(r, inventory, speech_pool, scenes, narration_seconds, target),
-        temperature=0.4, max_output_tokens=8192, thinking="high",
+        temperature=0.4, max_output_tokens=32768, thinking="high",
         cached_prefix=evidence_parts(inventory, speech_pool, request, story_map))
     result["validation_retries"] = errors
     return result
