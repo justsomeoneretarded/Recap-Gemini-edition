@@ -149,14 +149,60 @@ def allocate_shots(shots: list[dict], duration: float, source_duration: float, f
     if remainder:
         raise ValueError("Selected footage could not cover the narration")
     allocated = []
-    for shot, span, count in zip(clean, spans, frames):
+    for original, shot, span, count in zip(shots, clean, spans, frames):
         source_span = count / fps if trimming else span
         spare = max(0., span - source_span)
         offset = {"start": 0., "center": spare / 2, "end": spare}[shot["trim_mode"]]
+        if shot.get("anchor") is not None and "trim_mode" not in original:
+            # Keep the verified action moment on screen when trimming excess footage.
+            anchor = _number(shot["anchor"], "Shot anchor")
+            offset = min(spare, max(0., anchor - shot["start"] - source_span / 2))
         start = shot["start"] + offset
         allocated.append({**shot, "source_start": shot["start"], "source_end": shot["end"],
                           "start": start, "end": min(shot["end"], start + source_span),
                           "frames": count, "duration": count / fps, "speed": speed})
+    return allocated
+
+
+def sentence_spans(beat: dict) -> list[tuple[float, float]]:
+    """Measured per-sentence intervals inside a narration beat's audio.
+
+    Sentences come from the storyboard; word timings from the measured audio.
+    A cut to the next sentence's footage lands just before its first word.
+    """
+    from .voice import _normal
+    sentences = beat.get("sentences") or []
+    words = beat.get("words") or []
+    duration = _number(beat["duration"], "Beat duration")
+    counts = [sum(1 for token in s["text"].split() if _normal(token)) for s in sentences]
+    if not sentences or sum(counts) != len(words) or any(c == 0 for c in counts):
+        raise ValueError(f"Beat {beat.get('id')} word timings do not match its sentences")
+    firsts, lasts, index = [], [], 0
+    for count in counts:
+        firsts.append(float(words[index]["start"]))
+        lasts.append(float(words[index + count - 1]["end"]))
+        index += count
+    bounds = [0.]
+    for i in range(1, len(sentences)):
+        bounds.append(min(firsts[i], max(lasts[i-1], firsts[i] - .12)))
+    bounds.append(duration)
+    return [(bounds[i], bounds[i+1]) for i in range(len(sentences))]
+
+
+def allocate_segmented(beat: dict, source_duration: float, fps: int) -> list[dict]:
+    """Allocate each sentence's own shots to exactly that sentence's frames."""
+    spans = sentence_spans(beat)
+    total = math.ceil(_number(beat["duration"], "Beat duration") * fps - 1e-7)
+    edges = [0] + [min(total, round(end * fps)) for _, end in spans[:-1]] + [total]
+    allocated = []
+    for index in range(len(spans)):
+        frames = edges[index+1] - edges[index]
+        shots = [s for s in beat["shots"] if int(s.get("sentence_index", -1)) == index]
+        if not shots:
+            raise ValueError(f"Beat {beat.get('id')} sentence {index+1} has no matched footage")
+        if frames <= 0:
+            raise ValueError(f"Beat {beat.get('id')} sentence {index+1} is shorter than one frame")
+        allocated += allocate_shots(shots, frames / fps, source_duration, fps)
     return allocated
 
 
@@ -320,7 +366,10 @@ def render_plan(plan: dict, source: Path, outdir: Path, width: int = 1080, heigh
         if beat.get("timeline_start") is not None and abs(_number(beat["timeline_start"], "timeline_start")-target_time) > .05:
             raise ValueError("Storyboard timeline contains a gap or overlap")
         beat.update(duration=duration, timeline_start=target_time, timeline_end=target_time+duration)
-        beat["render_shots"] = allocate_shots(shots, duration, source_info["duration"], fps)
+        segmented = (kind == "narration" and beat.get("sentences") and beat.get("words")
+                     and all("sentence_index" in s for s in shots))
+        beat["render_shots"] = (allocate_segmented(beat, source_info["duration"], fps) if segmented
+                                else allocate_shots(shots, duration, source_info["duration"], fps))
         # Dialogue must retain its original speed. A sub-frame ceiling is
         # handled by normal frame quantization, not an intentional retime.
         if kind == "dialogue":

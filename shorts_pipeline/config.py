@@ -5,7 +5,10 @@ DEFAULTS = {'brief': '', 'story_notes': '', 'narrator': 'warguy', 'tts_model': '
             'target_seconds': 150, 'aspect': 'square', 'fps': 60,
             'script_model': 'gemma4:12b', 'vision_model': 'qwen3-vl:2b-instruct-q4_K_M',
             'ollama_url': 'http://127.0.0.1:11434', 'max_scenes': 120,
-            'auto_source_speech': True, 'caption_style': 'reference_word_fade'}
+            'auto_source_speech': True, 'caption_style': 'reference_word_fade',
+            'planner': 'gemini', 'gemini_preset': 'balanced', 'fallback_writer': 'none',
+            'forced_alignment': 'off'}
+LOCAL_WRITERS = ('gemma4:12b', 'qwen3:4b-instruct-2507-q4_K_M')
 
 
 def request_config(data: dict) -> dict:
@@ -38,6 +41,15 @@ def request_config(data: dict) -> dict:
         if not all(map(math.isfinite,(start,end))) or not 0<=start<end:
             raise ValueError('source_window must contain finite increasing nonnegative seconds.')
         result['source_window']=[start,end]
+    if result['planner'] not in ('gemini','local'):
+        raise ValueError('planner must be gemini or local.')
+    if result['fallback_writer'] not in ('none',)+LOCAL_WRITERS:
+        raise ValueError(f'fallback_writer must be none or one of {", ".join(LOCAL_WRITERS)}.')
+    if result['forced_alignment'] not in ('off','auto'):
+        raise ValueError('forced_alignment must be off or auto.')
+    if result['planner']=='gemini':
+        from .gemini.settings import settings_from_request
+        settings_from_request(result)  # Validate presets, models, passes and budget before any work.
     if result['fps'] not in (30,60):
         raise ValueError('fps must be 30 or 60.')
     maximum = result['max_scenes']

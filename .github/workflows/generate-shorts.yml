@@ -25,7 +25,7 @@ on:
         options: [warguy, kit-laser, female]
         default: warguy
       target_seconds:
-        description: Maximum length in seconds (15–180)
+        description: Maximum length in seconds (15–180; 135–180 suits the reference style)
         default: '150'
         type: string
       aspect:
@@ -33,18 +33,17 @@ on:
         type: choice
         options: [square, vertical]
         default: square
-      speech_model:
-        description: Chatterbox speech model
+      preset:
+        description: AI pipeline. Gemini needs the GEMINI_API_KEY secret; local-gemma4 is the original offline pipeline
         type: choice
-        options: [original, turbo, nano]
-        default: original
-      writer_model:
-        description: Writer model (Gemma is the writing baseline; Qwen is a smaller legacy option)
-        type: choice
-        options: ['gemma4:12b', 'qwen3:4b-instruct-2507-q4_K_M']
-        default: 'gemma4:12b'
+        options: [gemini-balanced, gemini-quality, gemini-economy, local-gemma4]
+        default: gemini-balanced
       source_window:
         description: Optional source excerpt start,end in seconds (for example 51,73)
+        type: string
+        required: false
+      options:
+        description: 'Optional extras, e.g. budget=2 review_passes=2 analysis=detailed fallback=gemma4:12b speech=turbo alignment=auto strict=true'
         type: string
         required: false
 
@@ -67,7 +66,6 @@ jobs:
       OLLAMA_MAX_LOADED_MODELS: '1'
       SHORTS_CPU_THREADS: '4'
       SHORTS_WHISPER_MODEL: base.en
-      SCRIPT_MODEL: ${{ inputs.writer_model || 'gemma4:12b' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -86,7 +84,16 @@ jobs:
         env:
           SHORTS_INPUTS: ${{ toJSON(inputs) }}
         run: PYTHONPATH=. python scripts/workflow_request.py
-      - name: Restore footage and visual-analysis cache
+      - name: Check the Gemini API key secret
+        if: env.SHORTS_PLANNER == 'gemini'
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "::error::Add a GEMINI_API_KEY repository secret (Settings → Secrets and variables → Actions), or choose the local-gemma4 preset."
+            exit 1
+          fi
+      - name: Restore footage and analysis cache
         id: source-cache
         uses: actions/cache/restore@v4
         with:
@@ -96,23 +103,32 @@ jobs:
             work/production/planning
             work/production/source-speech
             work/production/speech
-          key: shorts-source-v1-${{ env.SHORTS_SOURCE_CACHE_KEY }}-${{ github.run_id }}
-          restore-keys: shorts-source-v1-${{ env.SHORTS_SOURCE_CACHE_KEY }}-
+            work/production/gemini
+          key: shorts-source-v2-${{ env.SHORTS_SOURCE_CACHE_KEY }}-${{ github.run_id }}
+          restore-keys: shorts-source-v2-${{ env.SHORTS_SOURCE_CACHE_KEY }}-
       - name: Install CPU models and pipeline
         run: |
           python -m pip install --upgrade pip
           python -m pip install torch==2.6.0 torchaudio==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cpu
-          python -m pip install --no-cache-dir -e '.[voice,analysis,source]'
+          python -m pip install --no-cache-dir -e '.[voice,analysis,source,gemini]'
           python -m pip check
           python -m pip freeze > work/resolved-environment.txt
-      - name: Start Ollama and prepare models
+      - name: Start Ollama and prepare local models
+        if: env.SHORTS_NEEDS_OLLAMA == 'true'
         run: |
           python scripts/install_ollama.py
           "$RUNNER_TEMP/shorts-ollama/bin/ollama" serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
           python scripts/prepare_models.py
       - name: Generate short
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Optional, non-secret repository variable with current list prices for cost estimates.
+          SHORTS_GEMINI_PRICES: ${{ vars.GEMINI_PRICES_JSON }}
         run: python -m shorts_pipeline generate --request work/request.json --workdir work/production --output output/shorts
-      - name: Save footage and visual-analysis cache
+      - name: Summarize result
+        if: always()
+        run: python scripts/workflow_summary.py
+      - name: Save footage and analysis cache
         if: always() && steps.source-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
@@ -122,7 +138,8 @@ jobs:
             work/production/planning
             work/production/source-speech
             work/production/speech
-          key: shorts-source-v1-${{ env.SHORTS_SOURCE_CACHE_KEY }}-${{ github.run_id }}
+            work/production/gemini
+          key: shorts-source-v2-${{ env.SHORTS_SOURCE_CACHE_KEY }}-${{ github.run_id }}
       - name: Upload video and review files
         if: always()
         uses: actions/upload-artifact@v4
@@ -143,6 +160,8 @@ jobs:
             work/production/index/**/index.json
             work/production/planning/diagnostics/*.json
             work/production/source-speech/*.json
+            work/production/gemini/cache/diagnostics/*.json
+            work/production/gemini/runs/**/*.json
           if-no-files-found: ignore
       - name: Upload rejected speech diagnostics
         if: always()

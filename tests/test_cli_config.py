@@ -86,7 +86,7 @@ def test_automatic_path_keeps_source_speech_through_planning_and_render(tmp_path
              'timing_provenance':candidate['timing_provenance'],'shots':[{'start':2,'end':3}]}]}
     monkeypatch.setattr(planner,'make_plan',make)
     out=tmp_path/'out'
-    result=generate({'title':'Synthetic automatic-stage validation','source':str(source),
+    result=generate({'title':'Synthetic automatic-stage validation','source':str(source),'planner':'local',
                      'target_seconds':15,'fps':30,'preview_width':160},tmp_path/'work',out)
     timeline=json.loads((out/'timeline.json').read_text())
     assert result['qc']['status']=='passed'
