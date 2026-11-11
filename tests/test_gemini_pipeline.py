@@ -245,3 +245,28 @@ def test_merge_accepts_a_slightly_short_script(tmp_path, source):
     generate(_request(source), tmp_path / "work", out, gemini_transport=transport, synthesize=FakeSynth())
     history = json.loads((out / "correction-history.json").read_text())
     assert any(h.get("stage") == "D2" and h["outcome"] == "accepted" for h in history)
+
+
+def test_short_footage_is_extended_from_verified_events_never_rendered_short(tmp_path, source):
+    """Live run 43063993344 reached render with a sentence holding 1.47s of footage for 2.90s of speech."""
+    transport = FakeTransport(events=synthetic_events(30))
+    original = transport._ClipPlan
+
+    def tiny(parts):
+        plan = original(parts)
+        for event in plan["events"]:
+            for clip in event["clips"]:
+                clip["end"] = clip["start"] + 2.0  # Less picture than the slow voice needs.
+                clip["anchor"] = clip["start"] + 1.0
+        return plan
+    transport.overrides["ClipPlan"] = tiny
+    out = tmp_path / "out"
+    generate(_request(source), tmp_path / "work", out, gemini_transport=transport,
+             synthesize=FakeSynth(words_per_second=1.7))
+    history = json.loads((out / "correction-history.json").read_text())
+    assert any(h.get("action") in ("event_footage_fallback", "remove_short_sentence") for h in history)
+    timeline = json.loads((out / "timeline.json").read_text())
+    for beat in timeline["beats"]:
+        if beat["kind"] == "narration":
+            assert all(shot["speed"] >= 0.85 for shot in beat["render_shots"])
+    assert json.loads((out / "status.json").read_text())["state"] == "succeeded"
