@@ -1,0 +1,412 @@
+{
+ "source": "Generate Shorts run 43030385171, speech diagnostics (Whisper output for Chatterbox narration)",
+ "cases": [
+  {
+   "text": "John Wick hammers a chisel down to sever his own finger. He presents his gold wedding ring to a robed elder. The elder cauterizes the stump with a glowing iron.",
+   "duration": 8.56,
+   "recognized": [
+    {
+     "word": "John",
+     "start": 0.05,
+     "end": 0.59
+    },
+    {
+     "word": "Wick",
+     "start": 0.59,
+     "end": 0.83
+    },
+    {
+     "word": "hammers",
+     "start": 0.83,
+     "end": 1.23
+    },
+    {
+     "word": "a",
+     "start": 1.23,
+     "end": 1.27
+    },
+    {
+     "word": "chisel",
+     "start": 1.27,
+     "end": 1.53
+    },
+    {
+     "word": "down",
+     "start": 1.53,
+     "end": 1.79
+    },
+    {
+     "word": "to",
+     "start": 1.79,
+     "end": 2.01
+    },
+    {
+     "word": "set",
+     "start": 2.01,
+     "end": 2.17
+    },
+    {
+     "word": "his",
+     "start": 2.17,
+     "end": 2.37
+    },
+    {
+     "word": "own",
+     "start": 2.37,
+     "end": 2.55
+    },
+    {
+     "word": "finger.",
+     "start": 2.55,
+     "end": 2.77
+    },
+    {
+     "word": "He",
+     "start": 3.39,
+     "end": 3.39
+    },
+    {
+     "word": "presents",
+     "start": 3.39,
+     "end": 3.59
+    },
+    {
+     "word": "his",
+     "start": 3.59,
+     "end": 3.85
+    },
+    {
+     "word": "gold",
+     "start": 3.85,
+     "end": 4.05
+    },
+    {
+     "word": "wedding",
+     "start": 4.05,
+     "end": 4.31
+    },
+    {
+     "word": "ring",
+     "start": 4.31,
+     "end": 4.53
+    },
+    {
+     "word": "to",
+     "start": 4.53,
+     "end": 4.71
+    },
+    {
+     "word": "a",
+     "start": 4.71,
+     "end": 4.81
+    },
+    {
+     "word": "robed",
+     "start": 4.81,
+     "end": 5.15
+    },
+    {
+     "word": "elder.",
+     "start": 5.15,
+     "end": 5.31
+    },
+    {
+     "word": "The",
+     "start": 6.01,
+     "end": 6.03
+    },
+    {
+     "word": "elder",
+     "start": 6.03,
+     "end": 6.23
+    },
+    {
+     "word": "caught",
+     "start": 6.23,
+     "end": 6.51
+    },
+    {
+     "word": "rises",
+     "start": 6.51,
+     "end": 6.87
+    },
+    {
+     "word": "in",
+     "start": 6.87,
+     "end": 7.05
+    },
+    {
+     "word": "the",
+     "start": 7.05,
+     "end": 7.09
+    },
+    {
+     "word": "stump",
+     "start": 7.09,
+     "end": 7.27
+    },
+    {
+     "word": "with",
+     "start": 7.27,
+     "end": 7.47
+    },
+    {
+     "word": "a",
+     "start": 7.47,
+     "end": 7.55
+    },
+    {
+     "word": "glowing",
+     "start": 7.55,
+     "end": 7.75
+    },
+    {
+     "word": "iron.",
+     "start": 7.75,
+     "end": 8.15
+    }
+   ]
+  },
+  {
+   "text": "Desperate to prove allegiance to the High Table, John Wick hammers a chisel down to sever his own finger. He offers his gold wedding ring for survival. The robed elder sears the bleeding stump with a glowing hot iron before offering his parting blessing to Wick.",
+   "duration": 13.1,
+   "recognized": [
+    {
+     "word": "Desperate",
+     "start": 0.0,
+     "end": 0.58
+    },
+    {
+     "word": "to",
+     "start": 0.58,
+     "end": 0.7
+    },
+    {
+     "word": "prove",
+     "start": 0.7,
+     "end": 0.94
+    },
+    {
+     "word": "allegiance",
+     "start": 0.94,
+     "end": 1.12
+    },
+    {
+     "word": "to",
+     "start": 1.12,
+     "end": 1.5
+    },
+    {
+     "word": "the",
+     "start": 1.5,
+     "end": 1.56
+    },
+    {
+     "word": "High",
+     "start": 1.56,
+     "end": 1.7
+    },
+    {
+     "word": "Table,",
+     "start": 1.7,
+     "end": 2.02
+    },
+    {
+     "word": "John",
+     "start": 2.38,
+     "end": 2.4
+    },
+    {
+     "word": "Wick",
+     "start": 2.4,
+     "end": 2.58
+    },
+    {
+     "word": "hammers",
+     "start": 2.58,
+     "end": 3.04
+    },
+    {
+     "word": "a",
+     "start": 3.04,
+     "end": 3.1
+    },
+    {
+     "word": "chisel",
+     "start": 3.1,
+     "end": 3.36
+    },
+    {
+     "word": "down",
+     "start": 3.36,
+     "end": 3.6
+    },
+    {
+     "word": "to",
+     "start": 3.6,
+     "end": 3.78
+    },
+    {
+     "word": "setter",
+     "start": 3.78,
+     "end": 4.06
+    },
+    {
+     "word": "his",
+     "start": 4.06,
+     "end": 4.2
+    },
+    {
+     "word": "own",
+     "start": 4.2,
+     "end": 4.34
+    },
+    {
+     "word": "finger.",
+     "start": 4.34,
+     "end": 4.56
+    },
+    {
+     "word": "He",
+     "start": 5.26,
+     "end": 5.28
+    },
+    {
+     "word": "offers",
+     "start": 5.28,
+     "end": 5.52
+    },
+    {
+     "word": "his",
+     "start": 5.52,
+     "end": 5.72
+    },
+    {
+     "word": "gold",
+     "start": 5.72,
+     "end": 5.92
+    },
+    {
+     "word": "wedding",
+     "start": 5.92,
+     "end": 6.18
+    },
+    {
+     "word": "ring",
+     "start": 6.18,
+     "end": 6.44
+    },
+    {
+     "word": "for",
+     "start": 6.44,
+     "end": 6.7
+    },
+    {
+     "word": "survival.",
+     "start": 6.7,
+     "end": 7.02
+    },
+    {
+     "word": "The",
+     "start": 7.92,
+     "end": 7.92
+    },
+    {
+     "word": "road",
+     "start": 7.92,
+     "end": 8.1
+    },
+    {
+     "word": "elders",
+     "start": 8.1,
+     "end": 8.36
+    },
+    {
+     "word": "see",
+     "start": 8.36,
+     "end": 8.76
+    },
+    {
+     "word": "as",
+     "start": 8.76,
+     "end": 8.94
+    },
+    {
+     "word": "the",
+     "start": 8.94,
+     "end": 9.08
+    },
+    {
+     "word": "bleeding",
+     "start": 9.08,
+     "end": 9.28
+    },
+    {
+     "word": "stump",
+     "start": 9.28,
+     "end": 9.58
+    },
+    {
+     "word": "with",
+     "start": 9.58,
+     "end": 9.82
+    },
+    {
+     "word": "a",
+     "start": 9.82,
+     "end": 9.88
+    },
+    {
+     "word": "glowing",
+     "start": 9.88,
+     "end": 10.08
+    },
+    {
+     "word": "hot",
+     "start": 10.08,
+     "end": 10.38
+    },
+    {
+     "word": "iron",
+     "start": 10.38,
+     "end": 10.7
+    },
+    {
+     "word": "before",
+     "start": 10.7,
+     "end": 10.94
+    },
+    {
+     "word": "offering",
+     "start": 10.94,
+     "end": 11.3
+    },
+    {
+     "word": "his",
+     "start": 11.3,
+     "end": 11.46
+    },
+    {
+     "word": "parting",
+     "start": 11.46,
+     "end": 11.68
+    },
+    {
+     "word": "blessing",
+     "start": 11.68,
+     "end": 12.02
+    },
+    {
+     "word": "to",
+     "start": 12.02,
+     "end": 12.36
+    },
+    {
+     "word": "Wick.",
+     "start": 12.36,
+     "end": 12.52
+    }
+   ]
+  }
+ ]
+}

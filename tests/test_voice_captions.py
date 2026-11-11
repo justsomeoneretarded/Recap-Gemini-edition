@@ -191,3 +191,15 @@ def test_asr_tokenization_differences_get_estimated_timings_but_skips_still_fail
     recognized=[{'word':w,'start':i*.3,'end':i*.3+.25} for i,w in enumerate(heard)]
     with pytest.raises(ValueError,match='word counts differ'):
         _align_script(script,recognized,len(heard)*.3)
+
+
+def test_real_whisper_mishearings_and_zero_length_words_align():
+    """Live run 43030385171: 'cauterizes' heard as 'caught rises in', 'robed elder sears' as
+    'road elders see as', and zero-length words. Speech was complete; only ASR differed."""
+    import json
+    from pathlib import Path
+    data=json.loads((Path(__file__).parent/'fixtures'/'asr_mishearings_run5.json').read_text())
+    for case in data['cases']:
+        aligned=_align_script(case['text'],case['recognized'],case['duration'])
+        assert [w['word'] for w in aligned]==case['text'].split()
+        assert all(w['end']>w['start'] for w in aligned)
