@@ -323,11 +323,14 @@ def reconcile(client: GeminiClient, *, lines: list[dict], story_script: dict, cl
                       "cover_clips": cover, "story_map_inferences": context,
                       "approved_dialogue_speech_ids": editorial["dialogue_speech_ids"],
                       "ending_mode": editorial["ending_mode"]}, ensure_ascii=False))
+    # Running a little short only shortens the Short; running over breaks timing. So the
+    # merge keeps the strict maximum but a looser minimum than the first draft.
+    merge_budget = (math.floor(budget_words[1] * 0.6), budget_words[1])
     (beats, matches), errors = with_repair(
         client, "writing:reconcile", ReconciledScript, [text_part(prompt)], RECONCILE_SYSTEM,
         lambda r: validate_reconciled(r, lines=lines, clips=clips, story_map=story_map, inventory=inventory,
                                       speech_pool=speech_pool, allowed_quotes=list(editorial["dialogue_speech_ids"]),
-                                      notes=request.get("story_notes", ""), rate=rate, budget_words=budget_words),
+                                      notes=request.get("story_notes", ""), rate=rate, budget_words=merge_budget),
         attempts=3, temperature=0.5, max_output_tokens=32768, thinking="high",
         cached_prefix=evidence_parts(inventory, speech_pool, request))
     return {"beats": beats, "matches": matches, "validation_retries": errors}

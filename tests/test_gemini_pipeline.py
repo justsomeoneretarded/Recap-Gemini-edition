@@ -228,3 +228,20 @@ def test_invalid_merge_falls_back_to_the_story_first_script(tmp_path, source):
     assert any(h.get("stage") == "D2" and h["outcome"] == "fell_back_to_story_script" for h in history)
     assert any(c["schema"] == "MatchingResult" for c in transport.calls)  # Story-first sentences were matched.
     assert json.loads((out / "status.json").read_text())["state"] == "succeeded"
+
+
+def test_merge_accepts_a_slightly_short_script(tmp_path, source):
+    """Live run 43016875121 rejected a merge for being 2 words under the draft minimum."""
+    transport = FakeTransport(events=synthetic_events(30))
+    original = transport._ReconciledScript
+
+    def short(parts):
+        merged = original(parts)
+        for beat in merged["beats"]:
+            beat["lines"] = [l for l in beat.get("lines", []) if l["kind"] == "action"] if beat["kind"] == "narration" else []
+        return merged
+    transport.overrides["ReconciledScript"] = short
+    out = tmp_path / "out"
+    generate(_request(source), tmp_path / "work", out, gemini_transport=transport, synthesize=FakeSynth())
+    history = json.loads((out / "correction-history.json").read_text())
+    assert any(h.get("stage") == "D2" and h["outcome"] == "accepted" for h in history)
