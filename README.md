@@ -1,33 +1,114 @@
-# Recap Shorts
+# Recap Shorts — Gemini edition
 
-A standalone movie recap Shorts pipeline with its own **Generate Shorts** workflow. Choose footage, a story brief, a narrator, a maximum duration, and square or vertical output. This repository does not trigger or depend on long-form generation.
+A movie recap Shorts pipeline with its own **Generate Shorts** workflow. Choose footage, a story brief, a narrator, a maximum duration and square or vertical output. The Gemini edition adds a **multi-stage, evidence-grounded Gemini pipeline**. Gemini watches the source footage, builds a timestamped event inventory and story map, chooses the story, writes and reviews the script, matches every narration sentence to footage that shows it, reviews the edit independently and repairs specific problems. Rendering is still deterministic FFmpeg. Voices (Chatterbox), source dialogue (Whisper), captions and loudness handling are the existing, tested components. See the [architecture](docs/gemini-architecture.md).
 
-The initial style profile comes from eight owner-supplied references: action before backstory, causal story beats, compact white italic captions, meaningful object/face shots, selected movie dialogue, and story-dependent endings. All supplied exports are 1080×1080, roughly 136–180 seconds. Square is the default; vertical is an explicit option. This is an initial implementation, not a verified recreation of the creator's production process.
+The style profile comes from eight owner-supplied references, analysed in [reference analysis](docs/reference-analysis.md). Its main features are action before backstory, causal story beats, compact white italic captions, meaningful object/face shots, selected movie dialogue and story-dependent endings. The references are 1080×1080 and 136–180 seconds long. Square is the default and vertical (9:16) is an option. This is an engineering implementation, not a verified recreation of the creator's process. **The Gemini path has been tested offline only (mocked API). It has not yet produced a real recap with a live key.** See [validation](docs/validation.md).
 
-Read the [reference analysis](docs/reference-analysis.md), [ten-repository comparison](docs/technology-comparison.md), and [validation record](docs/validation.md). The [complete automatic workflow passed](https://github.com/justsomeoneretarded/Recap-Short-form/actions/runs/42165849180), producing a [14-second Warguy engineering preview](docs/validation-samples/automatic-warguy-pilot.mp4) at1080square/60fps. This test reused verified source analysis and generated a fresh script, voice and edit. The reference already has captions/narration, which overlap the generated content; the sample is not channel-ready.
+## 1. Get a Google AI Studio API key
 
-## Generate a Short on GitHub
+1. Open [Google AI Studio](https://aistudio.google.com/) and sign in with a Google account.
+2. Choose **Get API key → Create API key** and pick or create a Google Cloud project.
+3. **The free tier works**: the default `gemini-free` preset is built for it and costs nothing. Free keys have per-minute and per-day request limits, and some models (typically Pro) may have no free quota. The pipeline paces its requests, falls back to the next available Flash/Flash-Lite model, and stops cleanly if the daily quota runs out. Google may use free-tier prompts and uploaded footage to improve its products (see the Gemini API terms), so do not upload footage you are not allowed to share. The paid presets need a billing-enabled project.
+4. Copy the key. Treat it like a password: never paste it into an issue, a commit or a workflow input.
 
-Open **Actions → Generate Shorts → Run workflow**. Enter:
+## 2. Add the key to GitHub
+
+1. In this repository open **Settings → Secrets and variables → Actions**.
+2. Choose **New repository secret**, name it **`GEMINI_API_KEY`**, paste the key and save.
+3. Optional: under the **Variables** tab, add `GEMINI_PRICES_JSON` with current list prices from the Gemini pricing page. This makes the cost report exact rather than conservative, for example:
+   `{"gemini-3.8-flash": {"input": 0.5, "output": 3.0, "cached": 0.05, "audio": 1.0}}`
+
+The workflow passes the secret only to the key check and the generate step. It is never echoed, and error messages redact it.
+
+## 3. Generate a Short on GitHub
+
+Open **Actions → Generate Shorts → Run workflow** and fill in:
 
 | Field | What to provide |
 |---|---|
 | Title | Your Short's title |
-| Source URL | A direct HTTPS URL to source footage, including a GitHub Release attachment URL |
-| Brief | The scene/story angle and editing instructions |
-| Story notes | Verified names, context and events the script may use |
-| Narrator | Warguy, Kit Laser, or Female |
-| Maximum seconds | 15–180; default 150 |
+| Source URL | A direct HTTPS URL to clean movie/scene footage (GitHub Release attachments work) |
+| Brief | The story angle and editing instructions |
+| Story notes | Verified names and context. Names are only narrated if they appear here, in clearly spoken dialogue or on screen |
+| Narrator | Warguy, Kit Laser or Female |
+| Maximum seconds | 15–180. Use 135–180 for the reference style; default 150 |
 | Aspect | Square or vertical |
-| Speech model | Original, Turbo or Nano |
-| Writer | Gemma4 12B by default; Qwen3 4B is a smaller legacy option |
-| Source window | Optional start,end in seconds to analyze a relevant excerpt |
+| Preset | `gemini-free` (default; free AI Studio key), `gemini-balanced`, `gemini-quality`, `gemini-economy` (paid tier), or `local-gemma4` (original offline pipeline; no key needed) |
+| Source window | Optional `start,end` seconds of the relevant excerpt, e.g. `51,73` |
+| Options | Optional extras, see below |
 
-Use clean movie/scene footage for production. The eight reference Shorts already contain narration and burned captions; they are style references and engineering test material. A movie title alone cannot supply movie footage. Use a relevant source excerpt containing the actions you want narrated. Automatic planning describes every indexed span using a representative midpoint frame; it does not continuously understand all motion or speech. The default 120-span cap fails explicitly on larger footage. For full films, select an excerpt using the Source window field, prepare an excerpt file, deliberately raise the CLI cap, or provide a reviewed storyboard. With a source window, storyboard times are relative to that excerpt; provenance records its offset in the original. YouTube downloading is supported through yt-dlp but can be blocked by the runner/network; direct media is the reliable alternative tested here.
+**Options** are `key=value` pairs separated by spaces:
 
-After success, download **Artifacts → shorts-N**. It includes `final.mp4`, script and description, SRT/ASS captions, storyboard, measured timeline, three cover candidates, contact sheet, source provenance, caption-timing provenance, quality report and execution status. Cover candidates are sampled frames for selection, not evidence of an optimized thumbnail system. There is no automatic YouTube upload.
+| Option | Meaning | Default |
+|---|---|---|
+| `rpm=8` | Free tier: Gemini requests per minute (lower it if you see rate-limit retries) | 8 |
+| `max_requests=150` | Free tier: request cap per run, protecting the daily quota | 150 |
+| `budget=3` | Paid presets: maximum estimated spend in USD | quality 8 · balanced 3 · economy 1 |
+| `review_passes=2` | Independent review → targeted-correction rounds (0–4) | free 1 · quality 2 · balanced 2 · economy 1 |
+| `analysis=detailed` | Video analysis quality: `fast`, `standard`, `detailed` | free standard (≤6 zoom checks) · quality detailed · balanced standard · economy fast |
+| `fallback=gemma4:12b` | Use the local writer if Gemini is unavailable (adds Ollama setup time) | none |
+| `speech=turbo` | Chatterbox model: `original`, `turbo`, `nano` | original |
+| `alignment=auto` | Refine caption word timing with MMS forced alignment (≈1 GB model download) | off |
+| `strict=true` | Fail instead of rendering when critical review issues remain | false |
+| `writer=qwen3:4b-instruct-2507-q4_K_M` | Local writer for the `local-gemma4` preset | gemma4:12b |
 
-The workflow starts local models on the Actions runner; no paid inference API or TMDB key is required. The first run downloads substantial models and can take a long time on CPU. Account Actions usage/storage limits apply. The default writer Gemma4 12B is about 8 GB of weights; the optional legacy Qwen3 4B is about 2.5 GB. Qwen3-VL 2B is about 1.9 GB and Chatterbox weights about 3 GB. For the default Gemma chain, prefer at least 16 GB RAM and 25 GB free disk; the smaller Qwen chain needs about 18 GB free disk. Preflight rejects insufficient capacity before downloading models. These sizes establish feasibility, not editorial quality. The smaller local test workspace could not run the complete configured model chain; see validation.
+The job page shows a summary: state, review status, rendered-file checks, and estimated cost per stage. Download **Artifacts → shorts-N** for:
+
+| File | Contents |
+|---|---|
+| `final.mp4` | The rendered Short |
+| `script.txt`, `script-draft.json`, `description.txt` | Final script; draft, review notes and evidence references |
+| `event-inventory.json` | Timestamped event inventory with verification status and rejected events |
+| `story-map.json`, `editorial-plan.json` | Story map (observed vs inferred) and the editorial selection |
+| `evidence-map.json` | Sentence → shot evidence: what each shot shows, why it was placed, in/out, anchor |
+| `storyboard.json`, `timeline.json` | Storyboard and measured, frame-allocated timeline |
+| `narration-timing.json`, `captions.srt/.ass`, `caption-timing.json` | Narration and word timing, captions, timing provenance |
+| `quality-review.json`, `correction-history.json` | Independent review issues with severity, and every correction attempt |
+| `final-verification.json`, `quality-report.json` | Measurements of the rendered file; existing render QC |
+| `cost-report.json`, `gemini-settings.json` | Models per stage, tokens, cache use, estimated cost, retries, timings, preflight estimate |
+| `cover-01..03.jpg`, `contact-sheet.jpg`, `source-attribution.json` | Cover candidates, contact sheet, source provenance |
+
+`review_status` is `passed_automated_review`, `passed_with_warnings` or `needs_human_review`. **No result is marked production-ready**: watch it with sound before publishing. There is no automatic upload.
+
+### Free tier: what to expect
+
+- **Cost:** $0. `cost-report.json` still lists tokens and the *paid-price equivalent* for comparison.
+- **Request use:** a typical 150-second Short needs roughly 25–45 requests, paced at 8 per minute. The preflight estimate is in `gemini-settings.json`.
+- **Speed:** pacing adds a few minutes. Chatterbox narration on the CPU runner is still the slowest step.
+- **Hitting a limit:**
+  - Per-minute limits are retried after the wait the server asks for.
+  - If the **daily** quota runs out, the run stops with a clear message. Finished stages are saved in the Actions cache, so running the same inputs again the next day resumes where it stopped.
+  - A model with no free quota is skipped automatically in favour of the next candidate, and the switch is recorded.
+- **Quality:** free-tier quality depends on which Flash model your key can use. Pro-class writing/review models usually need the paid presets.
+
+### Estimated Gemini cost (paid presets)
+
+These figures come from the pipeline's **pre-flight estimator**, which uses upper-bound token assumptions and is not a measured bill. For a 150-second Short:
+
+| Preset | 3-min excerpt | 10-min excerpt | 30-min excerpt |
+|---|---|---|---|
+| economy (2.5 list prices / newest-model placeholders) | $0.15 / $0.45 | $0.17 / $0.50 | $0.23 / $0.71 |
+| balanced | $0.57 / $1.41 | $0.67 / $1.69 | $0.96 / $2.57 |
+| quality | $1.85 / $4.71 | $2.39 / $6.11 | $3.69 / $9.63 |
+
+The first number uses published Gemini 2.5 list prices. The second uses deliberately high placeholder prices for newer models whose prices are not in this repository. Actual usage is usually lower than these upper bounds. Each run records the real token counts in `cost-report.json`, and Google AI Studio billing is authoritative. Reruns of unchanged stages are served from cache at no cost.
+
+## How the Gemini pipeline works (short)
+
+- **A — Footage understanding:** windowed native video analysis with burned-in timecode, then code checks, then zoom re-inspection of uncertain, fast or important events.
+- **B — Story map:** observed events kept separate from inferences, which must cite their evidence.
+- **C — Editorial selection:** hook, causal chain, dialogue clips and ending mode.
+- **D — Script:** every sentence cites events and states what must be visible, followed by a separate script-review pass.
+- **E — Matching:** Gemini watches each sentence's candidate clips and picks in/out points and the action anchor.
+- **F — Shot plan:** deterministic placement with no footage reuse.
+- **G — Sync:** measured Chatterbox audio sets per-sentence cuts; overflow and footage shortfalls trigger targeted rewrites.
+- **H — Review:** an independent review that watches the placed shots.
+- **I — Correction:** bounded, targeted fixes.
+- **J — Verify:** checks on the rendered MP4.
+
+Details are in [docs/gemini-architecture.md](docs/gemini-architecture.md).
+
+Use clean movie/scene footage. The eight reference Shorts already contain narration and burned-in captions, so they are style references and test material, not production sources. A movie title alone cannot supply footage. For full films use **Source window**: Gemini analysis refuses sources longer than 45 minutes unless `max_source_minutes` is raised in a CLI request. The local preset keeps its original 120-span cap. YouTube downloading uses yt-dlp but can be blocked on runners; direct media URLs are reliable.
 
 ## Local setup
 
@@ -38,17 +119,39 @@ python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install torch==2.6.0 torchaudio==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cpu
-python -m pip install -e '.[voice,analysis,source,test]'
+python -m pip install -e '.[voice,analysis,source,gemini,test]'
 ```
 
-Start Ollama separately, then prepare the configured writer and vision model:
+For the Gemini pipeline, put the key in your shell environment, never in a file you commit:
+
+```bash
+export GEMINI_API_KEY='paste-your-key-here'
+```
+
+```bash
+python -m shorts_pipeline generate --request examples/request.json --output output/shorts
+```
+
+`examples/request.json` uses `"planner": "gemini"`. Request fields include `gemini_preset`, `gemini_models` (per-stage overrides, e.g. `{"writing": "gemini-2.5-pro"}`), `analysis_quality`, `review_passes`, `max_budget_usd`, `fallback_writer`, `forced_alignment` and `strict_review`. To run the original local pipeline instead, set `"planner": "local"` and start Ollama:
 
 ```bash
 ollama serve
-# In a second terminal, with the environment activated:
+```
+
+Then, in a second terminal with the environment activated:
+
+```bash
 python scripts/prepare_models.py
+```
+
+```bash
 python -m shorts_pipeline doctor
-python -m shorts_pipeline generate --request examples/request.json --output output/shorts
+```
+
+Optional real-API checks (a handful of requests; free tier is fine) run only when you ask for them, locally or through **Actions → Gemini Live Check**:
+
+```bash
+RUN_GEMINI_LIVE=1 python -m pytest tests/test_gemini_live.py -v -s
 ```
 
 Edit `examples/request.json` with a real local source path or HTTPS URL. Optional `source_window: [51, 73]` limits analysis to those original-source seconds. Writer/vision names and Ollama URL can be overridden in the request. `target_seconds` is a maximum, not an instruction to stretch speech. Real synthesized duration drives the edit; over-budget speech and insufficient footage fail with an actionable error. A bounded compression pass can rewrite overlong narration against its fixed shot budget; source quotes and selected shots remain unchanged and every attempt is retained for review. Output may be shorter than the chosen maximum. Use a fresh output folder for each run; completed results are preserved rather than overwritten.
@@ -74,8 +177,9 @@ For a reviewed edit, add `"plan": "work/storyboard.json"` to the request. A stor
 
 The example demonstrates the schema; those words are not a claim about your footage. Automatic planning can now select short English source-speech passages from a fully retained ASR transcript. It copies recognized words and source times by ID, reserves their time, and does not invent quotes or speaker identities. Reviewed storyboards remain available for precise dialogue choices and other languages. The source analysis records confidence and rejected candidates; ASR still needs final playback review. Crop focus is explicit per shot, not an automatic guarantee of face tracking. Optional local `music` can be added in the request; source audio is reduced under narration and retained for dialogue.
 
-## Models and timing
+## Models and timing (local pipeline and shared components)
 
+- Gemini path: models are chosen per stage from preset candidate lists and checked against `models.list()` at runtime (see [architecture](docs/gemini-architecture.md)). Edit timing comes from measured Chatterbox audio. Caption word timings are Whisper estimates, optionally refined by torchaudio MMS forced alignment (`alignment=auto`), which is rejected if it disagrees with the ASR estimate.
 - Writer: default `gemma4:12b`, drawing on the Top10 model selection. Its first saved-case draft and repair produced coherent narration covering the suit, broken rule and bounty. The smaller `qwen3:4b-instruct-2507-q4_K_M` remains a legacy option after repeated timing/quality failures. This is a case-specific comparison, not a broad writing benchmark. See the [validation record](docs/validation.md) for full pipeline coverage.
 - Frame descriptions: explicit `qwen3-vl:2b-instruct-q4_K_M`, one midpoint image per indexed span. The floating `2b` alias selected a thinking model in a runner test, so the instruction variant is selected deliberately. Scene boundaries prefer PySceneDetect AdaptiveDetector, with a labeled FFmpeg fallback.
 - Voice: pinned Chatterbox original/Turbo/Nano and the three existing owner-supplied references. Chatterbox's current upstream README describes it as retired research; the adapter is separate so it can be replaced. The pinned code still declares a mutable Perth dependency; inspect dependency resolution when upgrading.
@@ -89,6 +193,8 @@ New model-generated scripts and crops require editorial review. Evidence links a
 ```bash
 python -m pytest -q
 ```
+
+Gemini interfaces are tested offline with a scripted fake transport and the installed SDK's own request types; ordinary CI never calls the API.
 
 Tests include actual synthetic A/V renders with audio checks, captions, duration/coverage validation, source and planner failures, and a complete supplied-audio CLI run. Synthetic tones exercise the machinery; they are not narrator-quality tests.
 

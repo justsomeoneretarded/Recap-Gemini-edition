@@ -9,4 +9,4 @@ The 81 source text/code files and 15 smaller binary voice/validation assets were
 
 These can be retrieved from the original repository if the examples/tests need them. Existing README links to these two local files therefore won't work until they're copied.
 
-No Gemini integration has been implemented yet. Give an implementation agent the new repository and the migration instructions separately. The original repository is unchanged.
+The multi-stage Gemini pipeline has since been implemented in this repository (see `docs/gemini-architecture.md`). The original repository is unchanged; its local Gemma pipeline remains available here as `planner: local`.

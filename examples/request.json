@@ -7,5 +7,8 @@
   "tts_model": "original",
   "target_seconds": 150,
   "aspect": "square",
-  "fps": 60
+  "fps": 60,
+  "planner": "gemini",
+  "gemini_preset": "free",
+  "review_passes": 1
 }

@@ -8,7 +8,7 @@ from .config import request_config, assign_timeline
 from .media import probe, write_json, excerpt
 
 
-def generate(request: dict, workdir: Path, outdir: Path) -> dict:
+def generate(request: dict, workdir: Path, outdir: Path, *, gemini_transport=None, synthesize=None) -> dict:
     from .sources import resolve_source, index_source
     from .planner import make_plan, validate_storyboard
     from .voice import synthesize_plan
@@ -21,6 +21,7 @@ def generate(request: dict, workdir: Path, outdir: Path) -> dict:
     if (outdir/'final.mp4').exists():
         raise FileExistsError('Output folder already contains final.mp4. Choose a fresh --output folder to preserve the previous completed run.')
     started = time.time()
+    gemini_run = None
     status = {'state':'running','stage':'source','started_at_epoch':started}
     def stage(name):
         status['stage'] = name
@@ -43,17 +44,31 @@ def generate(request: dict, workdir: Path, outdir: Path) -> dict:
             plan = validate_storyboard(plan,source_info['duration'])
             plan['planning_mode'] = 'supplied-storyboard'
         else:
-            candidates=[]
+            speech=None
             if request['auto_source_speech'] and source_info['has_audio']:
                 from .source_speech import analyze_source_speech
                 stage('source speech')
                 speech=analyze_source_speech(source,workdir)
                 write_json(outdir/'source-speech.json',speech)
-                candidates=speech['candidates']
             stage('index')
             scenes = index_source(source,workdir)
-            stage('storyboard')
-            plan = make_plan(request,source,scenes,workdir,source_speech=candidates)
+            if request['planner']=='gemini':
+                from .gemini.client import GeminiError
+                from .gemini.pipeline import run_gemini_pipeline
+                stage('gemini production')
+                try:
+                    plan,gemini_run = run_gemini_pipeline(request,source,source_info['duration'],workdir,outdir,
+                        scenes=scenes,speech=speech,transport=gemini_transport,synthesize=synthesize)
+                    status['review_status']=plan['planning']['review_status']
+                except GeminiError as exc:
+                    if request['fallback_writer']=='none':
+                        raise
+                    status['fallback']={'reason':str(exc)[:500],'writer':request['fallback_writer']}
+                    print(f'Shorts: Gemini unavailable ({type(exc).__name__}); using local fallback writer {request["fallback_writer"]}',flush=True)
+                    request={**request,'planner':'local','script_model':request['fallback_writer']}
+            if request['planner']=='local':
+                stage('storyboard')
+                plan = make_plan(request,source,scenes,workdir,source_speech=(speech or {}).get('candidates',[]))
         plan['title'] = request['title']
         plan['source_path'] = str(source)
         plan['source_origin'] = request['source']
@@ -62,7 +77,8 @@ def generate(request: dict, workdir: Path, outdir: Path) -> dict:
         write_json(outdir/'request.json',request)
         write_json(outdir/'storyboard.json',plan)
         stage('narration')
-        plan = synthesize_plan(plan,request['narrator'],workdir,model=request['tts_model'])
+        if plan.get('planning_mode')!='gemini-multistage':  # Gemini plans are already measured/synced.
+            plan = (synthesize or synthesize_plan)(plan,request['narrator'],workdir,model=request['tts_model'])
         plan = assign_timeline(plan,request['target_seconds'])
         write_json(outdir/'timeline.json',plan)
         width,height = (1080,1080) if request['aspect']=='square' else (1080,1920)
@@ -77,6 +93,17 @@ def generate(request: dict, workdir: Path, outdir: Path) -> dict:
         stage('render')
         result = render_plan(plan,source,outdir,width,height,int(request['fps']),
                              Path(request['music']).resolve() if request.get('music') else None)
+        if gemini_run is not None:
+            from .gemini.verify import verify_render
+            stage('final verification')
+            timeline=json.loads((outdir/'timeline.json').read_text(encoding='utf-8'))
+            verification=verify_render(result['final'],timeline,outdir,width=width,height=height,fps=int(request['fps']),
+                target=request['target_seconds'],source_duration=source_info['duration'],client=gemini_run.client,
+                render_review=gemini_run.settings.render_review)
+            status['automated_verification']=verification['automated_verdict']
+            status['production_ready']=False
+            gemini_run.ledger.save()
+            result['verification']=verification
         (outdir/'script.txt').write_text('\n\n'.join(b.get('text','') for b in plan['beats']),encoding='utf-8')
         (outdir/'description.txt').write_text(plan.get('description',request['brief'])+'\n',encoding='utf-8')
         status.update(state='succeeded',stage='complete',elapsed_seconds=round(time.time()-started,2),duration=plan['duration'])

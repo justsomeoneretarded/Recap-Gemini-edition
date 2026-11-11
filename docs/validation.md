@@ -38,3 +38,38 @@ Gemma4 produced coherent suit→broken-rule→bounty narration and subsequently 
 - A channel-ready recap requires clean movie/scene footage. This project produces reviewable files and does not publish to YouTube or promise retention, monetization, or identical results to a reference channel.
 
 Earlier checks remain distinct: the [11.901second reviewed pilot](validation-samples/original-warguy-engineering-pilot.mp4) bypassed writing. The [11.201second stage-resumed automatic-plan8 video](https://github.com/justsomeoneretarded/Recap-Short-form/blob/a77189a/docs/validation-samples/automatic-warguy-pilot.mp4) used a model-generated storyboard after cancellation; its [original plan](validation-samples/staged-plan8-original-plan.json) and [audit](validation-samples/staged-plan8-verification.json) are archived. Neither earlier check was proof of one complete automatic workflow.
+
+## Gemini edition (11 November 2026)
+
+**Verified here (offline):**
+
+- **195 tests pass** (2 opt-in live tests skipped) on Python 3.11 with FFmpeg and google-genai 3.1.0. That is the 148 original tests plus 47 new ones, including free-tier pacing, the request cap, zero-quota model fallback, daily-quota stop and an end-to-end free-tier run.
+- Gemini behaviour comes from a scripted fake transport derived from the prompt evidence. Synthetic media (testsrc2 and tones) and a fake synthesizer stand in for Chatterbox.
+- The new tests cover:
+  - a complete end-to-end run to a rendered, verified MP4 with every artifact
+  - resume after an interrupted run with no repeated stages or upload
+  - pre-flight and per-call budget stops
+  - narration overflow repaired by a targeted rewrite, and an unfixable overflow failing clearly
+  - failed corrections reported as `needs_human_review`, and `strict_review` failing instead
+  - a review-driven shot rematch
+  - local fallback when models are unavailable
+  - missing or invalid key, unsupported models, rate limits, timeouts, malformed output, key redaction, response and upload caching
+  - rejection of out-of-window timestamps, unheard dialogue, unsupported names, unobserved events, unknown event/shot IDs, chronology errors, invented quotes, channel filler, dangling sentences, footage reuse and actions trimmed away
+  - sentence-segmented frame allocation
+  - Stage J detection of wrong geometry, repeated footage and out-of-range sources in a real encoded file
+  - workflow input parsing and secret scoping
+- `tests/test_gemini_sdk_contract.py` builds real SDK request objects without network access:
+  - clipped `VideoMetadata` parts, `media_resolution`, JSON response config, and both `thinking_budget` and `thinking_level` styles
+  - conversion of all nine response schemas
+  - classification of `ClientError` / `ServerError` codes
+- Adding the `gemini` extra to the voice/analysis/source dependency set resolves with no change to existing pins (`uv pip compile`, PyPI metadata).
+
+**Not verified, and needs a live key and footage:**
+
+- No real Gemini call has been made from this environment: the docs site and API were unreachable here. Model availability, real response quality, token counts, timestamp accuracy and actual costs are therefore unmeasured.
+- Model IDs come from the installed SDK's catalogue and are resolved at runtime. Prices for models newer than Gemini 3 preview are conservative placeholders.
+- No 135–180-second Short has been produced by the Gemini path. There is no local-vs-Gemini comparison on the same clean footage, so **no quality improvement is claimed yet**.
+- Chatterbox, Whisper and MMS forced alignment were not executed in these tests. MMS alignment is implemented as an option with an agreement guard, but it is unexercised on real audio.
+- The Generate Shorts workflow change has not been run on GitHub Actions.
+
+Recommended first live check: run **Gemini Live Check**, then Generate Shorts with the default `gemini-free` preset on a 2–3-minute clean excerpt. Then run `local-gemma4` on the same excerpt, and compare factual accuracy, sentence-to-shot relevance (`evidence-map.json`), sync, review findings and `cost-report.json`.
