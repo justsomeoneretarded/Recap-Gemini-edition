@@ -8,7 +8,7 @@ The style profile comes from eight owner-supplied references, analysed in [refer
 
 1. Open [Google AI Studio](https://aistudio.google.com/) and sign in with a Google account.
 2. Choose **Get API key → Create API key** and pick or create a Google Cloud project.
-3. Video analysis of real films usually needs a **paid (billing-enabled) project**. Free-tier quotas are small and their data-use terms differ. Set a spending cap in Google Cloud billing if you want a hard limit.
+3. **The free tier works**: the default `gemini-free` preset is built for it and costs nothing. Free keys have per-minute and per-day request limits, and some models (typically Pro) may have no free quota. The pipeline paces its requests, falls back to the next available Flash/Flash-Lite model, and stops cleanly if the daily quota runs out. Google may use free-tier prompts and uploaded footage to improve its products (see the Gemini API terms), so do not upload footage you are not allowed to share. The paid presets need a billing-enabled project.
 4. Copy the key. Treat it like a password: never paste it into an issue, a commit or a workflow input.
 
 ## 2. Add the key to GitHub
@@ -33,7 +33,7 @@ Open **Actions → Generate Shorts → Run workflow** and fill in:
 | Narrator | Warguy, Kit Laser or Female |
 | Maximum seconds | 15–180. Use 135–180 for the reference style; default 150 |
 | Aspect | Square or vertical |
-| Preset | `gemini-balanced` (default), `gemini-quality`, `gemini-economy`, or `local-gemma4` (original offline pipeline; no key needed) |
+| Preset | `gemini-free` (default; free AI Studio key), `gemini-balanced`, `gemini-quality`, `gemini-economy` (paid tier), or `local-gemma4` (original offline pipeline; no key needed) |
 | Source window | Optional `start,end` seconds of the relevant excerpt, e.g. `51,73` |
 | Options | Optional extras, see below |
 
@@ -41,9 +41,11 @@ Open **Actions → Generate Shorts → Run workflow** and fill in:
 
 | Option | Meaning | Default |
 |---|---|---|
-| `budget=3` | Maximum estimated Gemini spend in USD for this run | quality 8 · balanced 3 · economy 1 |
-| `review_passes=2` | Independent review → targeted-correction rounds (0–4) | quality 2 · balanced 2 · economy 1 |
-| `analysis=detailed` | Video analysis quality: `fast`, `standard`, `detailed` | quality detailed · balanced standard · economy fast |
+| `rpm=8` | Free tier: Gemini requests per minute (lower it if you see rate-limit retries) | 8 |
+| `max_requests=150` | Free tier: request cap per run, protecting the daily quota | 150 |
+| `budget=3` | Paid presets: maximum estimated spend in USD | quality 8 · balanced 3 · economy 1 |
+| `review_passes=2` | Independent review → targeted-correction rounds (0–4) | free 1 · quality 2 · balanced 2 · economy 1 |
+| `analysis=detailed` | Video analysis quality: `fast`, `standard`, `detailed` | free standard (≤6 zoom checks) · quality detailed · balanced standard · economy fast |
 | `fallback=gemma4:12b` | Use the local writer if Gemini is unavailable (adds Ollama setup time) | none |
 | `speech=turbo` | Chatterbox model: `original`, `turbo`, `nano` | original |
 | `alignment=auto` | Refine caption word timing with MMS forced alignment (≈1 GB model download) | off |
@@ -68,7 +70,18 @@ The job page shows a summary: state, review status, rendered-file checks, and es
 
 `review_status` is `passed_automated_review`, `passed_with_warnings` or `needs_human_review`. **No result is marked production-ready**: watch it with sound before publishing. There is no automatic upload.
 
-### Estimated Gemini cost
+### Free tier: what to expect
+
+- **Cost:** $0. `cost-report.json` still lists tokens and the *paid-price equivalent* for comparison.
+- **Request use:** a typical 150-second Short needs roughly 25–45 requests, paced at 8 per minute. The preflight estimate is in `gemini-settings.json`.
+- **Speed:** pacing adds a few minutes. Chatterbox narration on the CPU runner is still the slowest step.
+- **Hitting a limit:**
+  - Per-minute limits are retried after the wait the server asks for.
+  - If the **daily** quota runs out, the run stops with a clear message. Finished stages are saved in the Actions cache, so running the same inputs again the next day resumes where it stopped.
+  - A model with no free quota is skipped automatically in favour of the next candidate, and the switch is recorded.
+- **Quality:** free-tier quality depends on which Flash model your key can use. Pro-class writing/review models usually need the paid presets.
+
+### Estimated Gemini cost (paid presets)
 
 These figures come from the pipeline's **pre-flight estimator**, which uses upper-bound token assumptions and is not a measured bill. For a 150-second Short:
 
@@ -135,7 +148,7 @@ python scripts/prepare_models.py
 python -m shorts_pipeline doctor
 ```
 
-Optional real-API checks, which spend a few cents at most, run only when you ask for them, locally or through **Actions → Gemini Live Check**:
+Optional real-API checks (a handful of requests; free tier is fine) run only when you ask for them, locally or through **Actions → Gemini Live Check**:
 
 ```bash
 RUN_GEMINI_LIVE=1 python -m pytest tests/test_gemini_live.py -v -s

@@ -52,7 +52,11 @@ def estimate_run_cost(settings: GeminiSettings, duration: float, target: float, 
         "matching": cost("matching", target * 2.5 * (q["match_fps"] * FRAME_TOKENS["low"] + 32) * 1.5, 12000),
         "review": cost("review", (target * (q["review_fps"] * FRAME_TOKENS["low"] + 32) + 15000) * (1 + settings.review_passes), 10000 * (1 + settings.review_passes)),
     }
+    sentences = max(4, math.ceil(target * 2.4 / 14))
+    requests = (windows + math.ceil(q["zoom_checks"] / 5) + 2 + 2 + math.ceil(sentences / 6) * 2
+                + math.ceil(sentences * 1.5 / 10) * (1 + settings.review_passes) + 6)
     return {"by_stage_usd": {k: round(v, 4) for k, v in rows.items()}, "total_usd": round(sum(rows.values()), 4),
+            "estimated_requests": requests,
             "models": models, "basis": "upper-bound token assumptions x price table; actual usage is recorded per call"}
 
 
@@ -67,7 +71,8 @@ class Run:
         self.request, self.source, self.duration = request, Path(source), float(source_duration)
         self.workdir, self.outdir, self.log = Path(workdir), Path(outdir), log
         self.settings = settings_from_request(request)
-        self.ledger = CostLedger(self.settings.max_budget_usd, self.outdir / "cost-report.json")
+        self.ledger = CostLedger(self.settings.max_budget_usd, self.outdir / "cost-report.json",
+                                 free_tier=self.settings.free_tier)
         self.client = GeminiClient(self.settings, self.ledger, self.workdir / "gemini" / "cache", transport, sleep=sleep)
         self.scenes = scenes
         self.speech = speech or {}
@@ -263,7 +268,14 @@ def run_gemini_pipeline(request: dict, source: Path, source_duration: float, wor
     models = run.client.resolve_models()
     estimate = estimate_run_cost(settings, source_duration, run.target, models)
     _write_json(outdir / "gemini-settings.json", {**settings.to_json(), "preflight_estimate": estimate})
-    if estimate["total_usd"] > settings.max_budget_usd:
+    if settings.free_tier:
+        if settings.max_requests and estimate["estimated_requests"] > settings.max_requests:
+            raise BudgetExceeded(f"About {estimate['estimated_requests']} Gemini requests are needed but this run is "
+                                 f"capped at {settings.max_requests} to protect the free-tier daily quota. Use a "
+                                 "shorter source window, analysis=fast, or raise max_requests.")
+        log(f"Gemini free tier: about {estimate['estimated_requests']} requests, paced at "
+            f"{settings.requests_per_minute:g}/minute; not billed")
+    elif estimate["total_usd"] > settings.max_budget_usd:
         raise BudgetExceeded(f"Estimated Gemini cost ${estimate['total_usd']:.2f} exceeds the ${settings.max_budget_usd:.2f} "
                              f"budget before any upload ({estimate['by_stage_usd']}). Raise max_budget_usd, choose a "
                              "cheaper preset/analysis quality, or shorten the source window.")

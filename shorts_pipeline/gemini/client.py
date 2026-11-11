@@ -14,6 +14,7 @@ import math
 import mimetypes
 import os
 import random
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,14 @@ class GeminiRateLimited(GeminiError):
     pass
 
 
+class GeminiQuotaExhausted(GeminiRateLimited):
+    """A daily (free-tier) quota is used up; retrying today will not help."""
+
+
+class GeminiNoFreeQuota(GeminiModelUnavailable):
+    """The key's tier has zero quota for this model (e.g. a Pro model on the free tier)."""
+
+
 class GeminiTimeout(GeminiError):
     pass
 
@@ -52,6 +61,16 @@ class GeminiOutputError(GeminiError):
 
 class BudgetExceeded(GeminiError):
     pass
+
+
+class RequestLimitExceeded(BudgetExceeded):
+    pass
+
+
+def _retry_delay(message: str) -> float | None:
+    """Server-suggested wait from a 429 (RetryInfo 'retryDelay' or 'retry in Ns')."""
+    match = re.search(r"retry(?:_?delay)?['\"]?\s*[:=]?\s*['\"]?(?:in\s+)?([0-9]+(?:\.[0-9]+)?)\s*s", message, re.I)
+    return float(match.group(1)) if match else None
 
 
 def _redact(text: str) -> str:
@@ -110,8 +129,9 @@ def estimate_tokens(parts: list[dict], resolution: str = "low", system: str = ""
 class CostLedger:
     """Token usage, estimated cost, retries and stage timing for one run."""
 
-    def __init__(self, max_budget_usd: float, path: Path | None = None):
+    def __init__(self, max_budget_usd: float, path: Path | None = None, free_tier: bool = False):
         self.max_budget_usd = float(max_budget_usd)
+        self.free_tier = free_tier
         self.path = path
         self.calls: list[dict] = []
         self.stage_seconds: dict[str, float] = {}
@@ -130,6 +150,8 @@ class CostLedger:
 
     def reserve(self, stage: str, model: str, estimated_input: int, max_output: int) -> float:
         estimate = self.cost(model, estimated_input, max_output)
+        if self.free_tier:
+            return estimate  # Free tier is not billed; request pacing/limits protect the quota instead.
         if self.spent_usd + estimate > self.max_budget_usd + 1e-9:
             raise BudgetExceeded(
                 f"Stage {stage} would exceed the ${self.max_budget_usd:.2f} Gemini budget: "
@@ -171,7 +193,10 @@ class CostLedger:
             "note": ("Costs are estimates from token usage reported by the API and the price table in "
                      "shorts_pipeline/gemini/settings.py (or SHORTS_GEMINI_PRICES). Google AI Studio "
                      "billing is authoritative; the API does not return billed amounts."),
-            "max_budget_usd": self.max_budget_usd,
+            "billing": ("Gemini API free tier: not billed. USD figures are the paid list-price equivalent of the "
+                        "tokens used, shown for comparison only." if self.free_tier else "paid tier (estimate)"),
+            "requests_sent": sum(1 for c in self.calls if not c.get("response_cache_hit")),
+            "max_budget_usd": None if self.free_tier else self.max_budget_usd,
             "estimated_total_usd": round(self.spent_usd, 6),
             "by_stage": by_stage,
             "stage_seconds": self.stage_seconds,
@@ -328,11 +353,15 @@ class GeminiClient:
             transport = SdkTransport(key, settings.request_timeout_seconds)
         self.transport = transport
         self._context_caches: dict[str, str] = {}
+        self.available_models: set[str] | None = None
+        self.requests_sent = 0
+        self._last_request = 0.0
 
     # ---- models
     def resolve_models(self) -> dict[str, str]:
         try:
             available = set(self.transport.list_models())
+            self.available_models = available
         except Exception as exc:  # noqa: BLE001 - classified below
             category, message = self._classify(exc)
             if category == "auth":
@@ -423,15 +452,47 @@ class GeminiClient:
 
     # ---- generation
     def generate(self, stage: str, schema: type[BaseModel], parts: list[dict], *, system: str,
-                 model: str | None = None, temperature: float = 0.3, max_output_tokens: int = 8192,
-                 resolution: str | None = None, thinking: str | None = "medium",
-                 cached_prefix: list[dict] | None = None) -> BaseModel:
+                 model: str | None = None, **kwargs) -> BaseModel:
         """Call Gemini for a validated structured result, with caching and retries.
 
-        `cached_prefix` parts precede `parts`; when large they become an explicit
-        context cache so repeated stages pay the cached-token rate.
+        If the stage's model turns out to be unusable for this key (not found, or
+        zero quota on the free tier), the next available candidate in the stage's
+        preference list is used for this and every later call, and recorded.
         """
-        model = model or self.settings.resolved_models.get(stage.split(":")[0]) or self.settings.model_preferences[stage.split(":")[0]][0]
+        if model is not None:
+            return self._generate(stage, schema, parts, system=system, model=model, **kwargs)
+        base = stage.split(":")[0]
+        while True:
+            current = self.settings.resolved_models.get(base) or self.settings.model_preferences[base][0]
+            try:
+                return self._generate(stage, schema, parts, system=system, model=current, **kwargs)
+            except GeminiModelUnavailable as exc:
+                candidates = list(self.settings.model_preferences[base])
+                later = candidates[candidates.index(current) + 1:] if current in candidates else []
+                usable = [m for m in later if self.available_models is None or m in self.available_models]
+                if not usable:
+                    raise GeminiModelUnavailable(f"{exc} No further {base} model candidates remain "
+                                                 f"({', '.join(candidates)}).") from exc
+                self.settings.resolved_models[base] = usable[0]
+                self.ledger.note(kind="model_substitution", stage=base, preferred=current, used=usable[0],
+                                 reason=str(exc)[:300])
+
+    def _pace(self) -> None:
+        if self.settings.max_requests and self.requests_sent >= self.settings.max_requests:
+            raise RequestLimitExceeded(
+                f"This run reached its limit of {self.settings.max_requests} Gemini requests (set to protect the "
+                "daily free-tier quota). Finished stages are cached; rerun to resume, or raise max_requests.")
+        rpm = self.settings.requests_per_minute
+        if rpm:
+            wait = self._last_request + 60.0 / rpm - time.monotonic()
+            if wait > 0:
+                self.sleep(wait)
+        self._last_request = time.monotonic()
+        self.requests_sent += 1
+
+    def _generate(self, stage: str, schema: type[BaseModel], parts: list[dict], *, system: str, model: str,
+                  temperature: float = 0.3, max_output_tokens: int = 8192, resolution: str | None = None,
+                  thinking: str | None = "medium", cached_prefix: list[dict] | None = None) -> BaseModel:
         prefix = cached_prefix or []
         identity = hashlib.sha256(json.dumps({
             "v": CLIENT_VERSION, "model": model, "system": system, "schema": schema.__name__,
@@ -461,6 +522,7 @@ class GeminiClient:
             attempt += 1
             self.ledger.reserve(stage, model, estimate, max_output_tokens)
             request_parts = call_parts + ([text_part(feedback)] if feedback else [])
+            self._pace()
             try:
                 result = self.transport.generate(model, request_parts, system=system, schema=schema,
                                                  temperature=temperature, max_output_tokens=max_output_tokens,
@@ -472,9 +534,21 @@ class GeminiClient:
                     raise GeminiAuthError(f"Gemini rejected the API key during {stage}: {message}") from exc
                 if category == "model":
                     raise GeminiModelUnavailable(f"Model {model} is not available for {stage}: {message}") from exc
+                if category == "rate_limit":
+                    if re.search(r"limit:\s*0\b", message):
+                        self._record(stage, model, None, started, reasons, error=f"no quota: {message[:300]}")
+                        raise GeminiNoFreeQuota(f"Model {model} has no quota for this API key's tier: {message[:300]}") from exc
+                    if re.search(r"per_?day", message, re.I):
+                        self._record(stage, model, None, started, reasons, error=f"daily quota: {message[:300]}")
+                        raise GeminiQuotaExhausted(
+                            f"The daily Gemini quota for {model} is used up ({stage}). Completed stages are cached: "
+                            f"rerun after the quota resets (midnight Pacific time) to resume. {message[:300]}") from exc
                 if category in ("rate_limit", "timeout", "server") and attempt <= self.settings.max_retries:
                     reasons.append(f"{category}: {message[:160]}")
                     delay = min(60.0, 2.0 * 2 ** (attempt - 1)) * (0.75 + 0.5 * random.random())
+                    suggested = _retry_delay(message) if category == "rate_limit" else None
+                    if suggested is not None:
+                        delay = min(120.0, max(delay, suggested + 1.0))
                     self.sleep(delay)
                     continue
                 failure = {"rate_limit": GeminiRateLimited, "timeout": GeminiTimeout}.get(category, GeminiError)

@@ -20,8 +20,11 @@ lines = ['## Generate Shorts result', '',
          f"- **Pre-render review:** {quality.get('review_status', status.get('review_status', 'n/a'))} "
          f"({quality.get('counts', {})})",
          f"- **Rendered-file checks:** {verify.get('automated_verdict', 'n/a')} — human playback review is still required",
-         f"- **Estimated Gemini cost:** ${cost.get('estimated_total_usd', 0):.4f} of ${cost.get('max_budget_usd', 0):.2f} budget "
-         "(estimate from token usage; AI Studio billing is authoritative)"]
+         (f"- **Gemini usage:** free tier, not billed — {cost.get('requests_sent', 0)} requests "
+          f"(paid list-price equivalent ${cost.get('estimated_total_usd', 0):.4f})"
+          if cost.get('max_budget_usd') is None and cost else
+          f"- **Estimated Gemini cost:** ${cost.get('estimated_total_usd', 0):.4f} of ${cost.get('max_budget_usd') or 0:.2f} budget "
+          "(estimate from token usage; AI Studio billing is authoritative)")]
 if status.get('fallback'):
     lines.append(f"- **Fallback used:** {status['fallback']['writer']} because {status['fallback']['reason'][:200]}")
 if cost.get('by_stage'):

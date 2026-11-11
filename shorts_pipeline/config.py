@@ -6,7 +6,7 @@ DEFAULTS = {'brief': '', 'story_notes': '', 'narrator': 'warguy', 'tts_model': '
             'script_model': 'gemma4:12b', 'vision_model': 'qwen3-vl:2b-instruct-q4_K_M',
             'ollama_url': 'http://127.0.0.1:11434', 'max_scenes': 120,
             'auto_source_speech': True, 'caption_style': 'reference_word_fade',
-            'planner': 'gemini', 'gemini_preset': 'balanced', 'fallback_writer': 'none',
+            'planner': 'gemini', 'gemini_preset': 'free', 'fallback_writer': 'none',
             'forced_alignment': 'off'}
 LOCAL_WRITERS = ('gemma4:12b', 'qwen3:4b-instruct-2507-q4_K_M')
 

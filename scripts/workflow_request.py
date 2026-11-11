@@ -6,12 +6,13 @@ from datetime import datetime,timezone
 from pathlib import Path
 from shorts_pipeline.config import DEFAULTS, LOCAL_WRITERS, request_config
 
-PRESETS = {'gemini-balanced':('gemini','balanced'),'gemini-quality':('gemini','quality'),
+PRESETS = {'gemini-free':('gemini','free'),'gemini-balanced':('gemini','balanced'),'gemini-quality':('gemini','quality'),
            'gemini-economy':('gemini','economy'),'local-gemma4':('local',None)}
 # Advanced options: space- or comma-separated key=value pairs in one text box.
 OPTION_KEYS = {'budget':'max_budget_usd','review_passes':'review_passes','analysis':'analysis_quality',
                'fallback':'fallback_writer','speech':'tts_model','alignment':'forced_alignment',
-               'strict':'strict_review','writer':'script_model'}
+               'strict':'strict_review','writer':'script_model','rpm':'requests_per_minute',
+               'max_requests':'max_requests'}
 
 
 def parse_options(text: str) -> dict:
@@ -25,7 +26,9 @@ def parse_options(text: str) -> dict:
         name = OPTION_KEYS[key]
         if name == 'max_budget_usd':
             value = float(value.lstrip('$'))
-        elif name == 'review_passes':
+        elif name == 'requests_per_minute':
+            value = float(value)
+        elif name in ('review_passes', 'max_requests'):
             value = int(value)
         elif name == 'strict_review':
             value = value.lower() in ('1', 'true', 'yes')
@@ -35,7 +38,7 @@ def parse_options(text: str) -> dict:
 
 def build(data: dict) -> dict:
     window = json.loads('['+data['source_window']+']') if data.get('source_window','').strip() else None
-    planner, preset = PRESETS[data.get('preset') or 'gemini-balanced']
+    planner, preset = PRESETS[data.get('preset') or 'gemini-free']
     request = {'title':data['title'], 'source':data['source_url'], 'brief':data['brief'],
                'story_notes':data.get('story_notes',''), 'narrator':data['narrator'],
                'target_seconds':float(data['target_seconds']), 'aspect':data['aspect'],

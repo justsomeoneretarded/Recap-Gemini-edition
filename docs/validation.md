@@ -43,7 +43,7 @@ Earlier checks remain distinct: the [11.901second reviewed pilot](validation-sam
 
 **Verified here (offline):**
 
-- **190 tests pass** (2 opt-in live tests skipped) on Python 3.11 with FFmpeg and google-genai 3.1.0. That is the 148 original tests plus 42 new ones.
+- **195 tests pass** (2 opt-in live tests skipped) on Python 3.11 with FFmpeg and google-genai 3.1.0. That is the 148 original tests plus 47 new ones, including free-tier pacing, the request cap, zero-quota model fallback, daily-quota stop and an end-to-end free-tier run.
 - Gemini behaviour comes from a scripted fake transport derived from the prompt evidence. Synthetic media (testsrc2 and tones) and a fake synthesizer stand in for Chatterbox.
 - The new tests cover:
   - a complete end-to-end run to a rendered, verified MP4 with every artifact
@@ -72,4 +72,4 @@ Earlier checks remain distinct: the [11.901second reviewed pilot](validation-sam
 - Chatterbox, Whisper and MMS forced alignment were not executed in these tests. MMS alignment is implemented as an option with an agreement guard, but it is unexercised on real audio.
 - The Generate Shorts workflow change has not been run on GitHub Actions.
 
-Recommended first live check: run **Gemini Live Check**, then Generate Shorts with `gemini-economy` on a 2–3-minute clean excerpt. Then run `gemini-balanced` and `local-gemma4` on the same excerpt, and compare factual accuracy, sentence-to-shot relevance (`evidence-map.json`), sync, review findings and `cost-report.json`.
+Recommended first live check: run **Gemini Live Check**, then Generate Shorts with the default `gemini-free` preset on a 2–3-minute clean excerpt. Then run `local-gemma4` on the same excerpt, and compare factual accuracy, sentence-to-shot relevance (`evidence-map.json`), sync, review findings and `cost-report.json`.

@@ -182,3 +182,16 @@ def test_gemini_failure_uses_optional_local_fallback_writer(tmp_path, source, mo
 def no_backoff_sleep(monkeypatch):
     import shorts_pipeline.gemini.client as client
     monkeypatch.setattr(client.time, "sleep", lambda seconds: None)
+
+
+def test_free_tier_end_to_end_run_is_paced_and_reported_as_unbilled(tmp_path, source):
+    transport = FakeTransport(events=synthetic_events(30), models=["gemini-2.5-flash", "gemini-2.5-flash-lite"])
+    out = tmp_path / "out"
+    generate(_request(source, gemini_preset="free"), tmp_path / "work", out, gemini_transport=transport,
+             synthesize=FakeSynth())
+    cost = json.loads((out / "cost-report.json").read_text())
+    assert "not billed" in cost["billing"] and cost["max_budget_usd"] is None
+    assert 0 < cost["requests_sent"] <= 150
+    assert {c["model"] for c in transport.calls} == {"gemini-2.5-flash"}
+    settings = json.loads((out / "gemini-settings.json").read_text())
+    assert settings["free_tier"] and settings["preflight_estimate"]["estimated_requests"] <= 150

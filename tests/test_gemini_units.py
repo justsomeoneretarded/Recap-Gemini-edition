@@ -320,7 +320,7 @@ def test_deterministic_review_flags_repeats_missing_footage_names_and_overflow()
 
 def test_request_config_validates_gemini_options():
     request = request_config({"title": "A", "source": "x"})
-    assert request["planner"] == "gemini" and request["gemini_preset"] == "balanced"
+    assert request["planner"] == "gemini" and request["gemini_preset"] == "free"
     for bad in [{"gemini_preset": "ultra"}, {"review_passes": 9}, {"max_budget_usd": 0}, {"planner": "gpt"},
                 {"analysis_quality": "8k"}, {"fallback_writer": "llama"}]:
         with pytest.raises(ValueError):
@@ -355,3 +355,56 @@ def test_final_verification_measures_the_actual_file_and_flags_defects(tmp_path)
     assert ("source_range", "critical") in checks and report["automated_verdict"] == "failed"
     assert report["production_ready"] is False and report["checks"]["container"]["frames"] == 90
     assert report["checks"]["loudness"]["integrated_lufs"] is not None
+
+
+def test_free_tier_paces_requests_and_does_not_enforce_a_dollar_budget(tmp_path):
+    waits = []
+    settings = settings_from_request({"gemini_preset": "free"})
+    assert settings.free_tier and settings.requests_per_minute == 8 and not settings.explicit_cache
+    assert settings.analysis["zoom_checks"] == 6 and settings.max_retries == 6
+    ledger = CostLedger(0.0001, tmp_path / "cost.json", free_tier=True)
+    client = GeminiClient(settings, ledger, tmp_path / "cache", Scripted([REVIEW, {"verdict": "fail", "issues": []}]),
+                          sleep=waits.append)
+    client.generate("review", QualityReview, [text_part("x" * 40000)], system="s")
+    client.generate("review", QualityReview, [text_part("y")], system="s")
+    assert waits and 7.0 < waits[-1] <= 7.5  # 60 s / 8 requests per minute
+    report = json.loads((tmp_path / "cost.json").read_text())
+    assert "free tier: not billed" in report["billing"] and report["requests_sent"] == 2
+
+
+def test_free_tier_request_cap_protects_the_daily_quota(tmp_path):
+    from shorts_pipeline.gemini.client import RequestLimitExceeded
+    client = make_client(tmp_path, Scripted([REVIEW, REVIEW]), gemini_preset="free", max_requests=1)
+    client.generate("review", QualityReview, [text_part("a")], system="s")
+    with pytest.raises(RequestLimitExceeded, match="rerun to resume"):
+        client.generate("review", QualityReview, [text_part("b")], system="s")
+
+
+def test_zero_free_quota_falls_back_to_the_next_available_model(tmp_path):
+    transport = Scripted([FakeAPIError("rate_limit", "Quota exceeded for metric free_tier_requests, limit: 0, "
+                                                     "model: gemini-3.8-flash"), REVIEW],
+                         models=["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"])
+    client = make_client(tmp_path, transport, gemini_preset="free")
+    client.resolve_models()
+    assert client.generate("review", QualityReview, [text_part("x")], system="s").verdict == "pass"
+    assert client.settings.resolved_models["review"] == "gemini-2.5-flash"
+    assert any(e["kind"] == "model_substitution" and e["used"] == "gemini-2.5-flash" for e in client.ledger.events)
+    exhausted = make_client(tmp_path / "b", Scripted([FakeAPIError("rate_limit", "limit: 0")] * 3,
+                                                     models=["gemini-2.5-flash-lite"]), gemini_preset="free")
+    exhausted.resolve_models()
+    with pytest.raises(GeminiModelUnavailable, match="No further review model candidates"):
+        exhausted.generate("review", QualityReview, [text_part("x")], system="s")
+
+
+def test_daily_quota_stops_immediately_and_server_retry_delay_is_honoured(tmp_path):
+    from shorts_pipeline.gemini.client import GeminiQuotaExhausted
+    transport = Scripted([FakeAPIError("rate_limit", "Quota exceeded: GenerateRequestsPerDayPerProjectPerModel-FreeTier")])
+    client = make_client(tmp_path, transport, gemini_preset="free")
+    with pytest.raises(GeminiQuotaExhausted, match="rerun after the quota resets"):
+        client.generate("review", QualityReview, [text_part("x")], system="s")
+    assert transport.calls == 1
+    waits = []
+    client = make_client(tmp_path / "b", Scripted([FakeAPIError("rate_limit", "Please retry in 37.5s."), REVIEW]))
+    client.sleep = waits.append
+    client.generate("review", QualityReview, [text_part("x")], system="s")
+    assert max(waits) >= 38.5

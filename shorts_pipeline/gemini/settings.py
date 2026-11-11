@@ -20,6 +20,15 @@ PRO = ("gemini-3.1-pro-preview", "gemini-3-pro-preview", "gemini-2.5-pro")
 LITE = ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite")
 
 PRESETS = {
+    # Gemini API free tier: no billing, but low per-minute and per-day request
+    # limits, and some (Pro) models may have no free quota. Flash models first,
+    # Flash-Lite as fallbacks; calls are paced and capped per run.
+    "free": {
+        "models": {stage: FLASH + LITE for stage in ("analysis", "planning", "writing", "matching", "review")},
+        "analysis_quality": "standard", "review_passes": 1, "max_budget_usd": 50.0,
+        "render_review": False, "explicit_cache": False, "free_tier": True,
+        "requests_per_minute": 8, "max_requests": 150, "zoom_cap": 6,
+    },
     "quality": {
         "models": {"analysis": PRO, "planning": PRO, "writing": PRO, "matching": FLASH, "review": PRO},
         "analysis_quality": "detailed", "review_passes": 2, "max_budget_usd": 8.0,
@@ -120,22 +129,31 @@ class GeminiSettings:
     max_rewrite_attempts: int = 2
     max_timing_repairs: int = 2
     max_source_minutes: float = 45.0
+    free_tier: bool = False
+    requests_per_minute: float | None = None
+    max_requests: int | None = None
+    zoom_cap: int | None = None
     resolved_models: dict = field(default_factory=dict)
 
     @property
     def analysis(self) -> dict:
-        return ANALYSIS_QUALITY[self.analysis_quality]
+        settings = dict(ANALYSIS_QUALITY[self.analysis_quality])
+        if self.zoom_cap is not None:
+            settings["zoom_checks"] = min(settings["zoom_checks"], self.zoom_cap)
+        return settings
 
     def to_json(self) -> dict:
         return {"preset": self.preset, "analysis_quality": self.analysis_quality,
                 "review_passes": self.review_passes, "max_budget_usd": self.max_budget_usd,
                 "render_review": self.render_review, "explicit_cache": self.explicit_cache,
-                "strict_review": self.strict_review, "model_preferences": {k: list(v) for k, v in self.model_preferences.items()},
+                "strict_review": self.strict_review, "free_tier": self.free_tier,
+                "requests_per_minute": self.requests_per_minute, "max_requests": self.max_requests,
+                "model_preferences": {k: list(v) for k, v in self.model_preferences.items()},
                 "resolved_models": self.resolved_models, "analysis_settings": self.analysis}
 
 
 def settings_from_request(request: dict) -> GeminiSettings:
-    preset_name = request.get("gemini_preset", "balanced")
+    preset_name = request.get("gemini_preset", "free")
     if preset_name not in PRESETS:
         raise ValueError(f"gemini_preset must be one of {', '.join(PRESETS)}.")
     preset = PRESETS[preset_name]
@@ -157,9 +175,19 @@ def settings_from_request(request: dict) -> GeminiSettings:
     budget = float(request.get("max_budget_usd", preset["max_budget_usd"]))
     if not 0 < budget <= 50:
         raise ValueError("max_budget_usd must be greater than 0 and at most 50.")
+    rpm = request.get("requests_per_minute", preset.get("requests_per_minute"))
+    if rpm is not None and not 0 < float(rpm) <= 1000:
+        raise ValueError("requests_per_minute must be between 0 and 1000.")
+    cap = request.get("max_requests", preset.get("max_requests"))
+    if cap is not None and (isinstance(cap, bool) or not isinstance(cap, int) or not 1 <= cap <= 5000):
+        raise ValueError("max_requests must be an integer from 1 to 5000.")
     return GeminiSettings(preset=preset_name, model_preferences=preferences, analysis_quality=quality,
                           review_passes=passes, max_budget_usd=budget,
                           render_review=request.get("render_review", preset["render_review"]),
                           explicit_cache=bool(request.get("explicit_cache", preset["explicit_cache"])),
                           strict_review=bool(request.get("strict_review", False)),
-                          max_source_minutes=float(request.get("max_source_minutes", 45.0)))
+                          max_source_minutes=float(request.get("max_source_minutes", 45.0)),
+                          free_tier=bool(preset.get("free_tier", False)),
+                          requests_per_minute=float(rpm) if rpm is not None else None,
+                          max_requests=cap, zoom_cap=preset.get("zoom_cap"),
+                          max_retries=6 if preset.get("free_tier") else 4)

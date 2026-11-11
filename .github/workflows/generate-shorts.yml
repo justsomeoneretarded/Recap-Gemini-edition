@@ -34,16 +34,16 @@ on:
         options: [square, vertical]
         default: square
       preset:
-        description: AI pipeline. Gemini needs the GEMINI_API_KEY secret; local-gemma4 is the original offline pipeline
+        description: AI pipeline. gemini-free works with a free AI Studio key; the others need billing. local-gemma4 is the original offline pipeline
         type: choice
-        options: [gemini-balanced, gemini-quality, gemini-economy, local-gemma4]
-        default: gemini-balanced
+        options: [gemini-free, gemini-balanced, gemini-quality, gemini-economy, local-gemma4]
+        default: gemini-free
       source_window:
         description: Optional source excerpt start,end in seconds (for example 51,73)
         type: string
         required: false
       options:
-        description: 'Optional extras, e.g. budget=2 review_passes=2 analysis=detailed fallback=gemma4:12b speech=turbo alignment=auto strict=true'
+        description: 'Optional extras, e.g. review_passes=2 analysis=fast rpm=5 max_requests=150 fallback=gemma4:12b speech=turbo budget=2 (paid presets)'
         type: string
         required: false
 

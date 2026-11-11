@@ -20,7 +20,8 @@ def test_short_workflow_is_separate_and_user_text_is_structured():
     assert len(inputs)<=10
     assert inputs['narrator']['options']==['warguy','kit-laser','female']
     assert inputs['aspect']['options']==['square','vertical']
-    assert inputs['preset']['options'][0]=='gemini-balanced' and 'local-gemma4' in inputs['preset']['options']
+    assert inputs['preset']['options'][0]=='gemini-free' and inputs['preset']['default']=='gemini-free'
+    assert 'local-gemma4' in inputs['preset']['options']
     steps=workflow['jobs']['generate']['steps']
     names=[s.get('name') for s in steps]
     validation=names.index('Validate inputs before model downloads')
@@ -48,16 +49,18 @@ def test_gemini_key_is_a_secret_scoped_to_the_steps_that_need_it():
 
 def _inputs(**extra):
     return {'title':'T','source_url':'https://example.com/a.mp4','brief':'b','story_notes':'','narrator':'warguy',
-            'target_seconds':'150','aspect':'square','preset':'gemini-balanced','source_window':'','options':'',**extra}
+            'target_seconds':'150','aspect':'square','preset':'gemini-free','source_window':'','options':'',**extra}
 
 
 def test_workflow_options_map_to_validated_requests():
     from workflow_request import build
-    request=build(_inputs(options='budget=$1.5 review_passes=3 analysis=detailed fallback=gemma4:12b speech=turbo',
+    request=build(_inputs(preset='gemini-balanced',options='budget=$1.5 review_passes=3 analysis=detailed fallback=gemma4:12b speech=turbo',
                           source_window='51,73'))
     assert request['planner']=='gemini' and request['max_budget_usd']==1.5 and request['review_passes']==3
     assert request['analysis_quality']=='detailed' and request['fallback_writer']=='gemma4:12b'
     assert request['tts_model']=='turbo' and request['source_window']==[51.0,73.0]
+    free=build(_inputs(preset='',options='rpm=5 max_requests=90'))
+    assert free['gemini_preset']=='free' and free['requests_per_minute']==5.0 and free['max_requests']==90
     local=build(_inputs(preset='local-gemma4',options='writer=qwen3:4b-instruct-2507-q4_K_M'))
     assert local['planner']=='local' and local['script_model']=='qwen3:4b-instruct-2507-q4_K_M'
     for bad in ['colour=red','budget','review_passes=9','writer=gemma4:12b','analysis=8k']:

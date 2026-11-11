@@ -1,6 +1,6 @@
 """Optional real-API checks. They never run in ordinary CI.
 
-Run explicitly, with a key you are willing to spend a few cents on:
+Run explicitly, with your key (the free tier is fine; a few requests are used):
     RUN_GEMINI_LIVE=1 GEMINI_API_KEY=... python -m pytest tests/test_gemini_live.py -v
 The 'Gemini Live Check' workflow does the same from GitHub Actions on demand.
 """
@@ -13,16 +13,22 @@ pytestmark = pytest.mark.skipif(not (os.getenv("RUN_GEMINI_LIVE") == "1" and os.
                                 reason="live Gemini tests run only with RUN_GEMINI_LIVE=1 and GEMINI_API_KEY")
 
 
-def _client(tmp_path, preset="economy"):
+def _client(tmp_path, preset="free"):
     from shorts_pipeline.gemini.client import CostLedger, GeminiClient
     from shorts_pipeline.gemini.settings import settings_from_request
     settings = settings_from_request({"gemini_preset": preset, "max_budget_usd": 0.25})
-    return GeminiClient(settings, CostLedger(0.25, tmp_path / "cost.json"), tmp_path / "cache")
+    return GeminiClient(settings, CostLedger(0.25, tmp_path / "cost.json", free_tier=settings.free_tier),
+                        tmp_path / "cache")
 
 
 def test_live_models_resolve_for_every_preset(tmp_path):
-    for preset in ("economy", "balanced", "quality"):
-        resolved = _client(tmp_path, preset).resolve_models()
+    for preset in ("free", "economy", "balanced", "quality"):
+        try:
+            resolved = _client(tmp_path, preset).resolve_models()
+        except Exception as exc:  # Paid presets may list no usable model for a free key.
+            print(preset, "unavailable:", exc)
+            assert preset != "free", exc
+            continue
         assert set(resolved) == {"analysis", "planning", "writing", "matching", "review"}, preset
         print(preset, resolved)
 
@@ -43,4 +49,4 @@ def test_live_structured_video_analysis_of_a_synthetic_clip(tmp_path):
         system=ANALYSIS_SYSTEM, max_output_tokens=2048, resolution="low", thinking="low")
     assert all(0 <= e.start <= e.end <= 7 for e in result.events)
     report = client.ledger.report()
-    assert report["estimated_total_usd"] < 0.25 and report["calls"][-1]["prompt_tokens"] > 0
+    assert report["calls"][-1]["prompt_tokens"] > 0

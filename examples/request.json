@@ -9,7 +9,6 @@
   "aspect": "square",
   "fps": 60,
   "planner": "gemini",
-  "gemini_preset": "balanced",
-  "review_passes": 2,
-  "max_budget_usd": 3.0
+  "gemini_preset": "free",
+  "review_passes": 1
 }
