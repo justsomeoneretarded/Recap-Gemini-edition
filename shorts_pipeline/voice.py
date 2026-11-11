@@ -158,7 +158,18 @@ def _align_script(text: str, recognized: list[dict], duration: float) -> list[di
             # ASR commonly misspells names/numbers. Preserve the written script,
             # and explicitly classify these times as estimates, not forced alignment.
             if j-i != b-a:
-                raise ValueError("ASR word counts differ; retry speech or provide reviewed word timings.")
+                # ASR may tokenize the same speech differently ("gonna" / "going to", a split name).
+                # Accept only a small, textually similar difference and spread its measured
+                # interval over the script words; a skipped or extra word still fails.
+                written="".join(unit for unit,_ in script_units[i:j])
+                heard="".join(w["unit"] for w in spoken_units[a:b])
+                if abs((j-i)-(b-a)) > 1 or max(j-i,b-a) > 3 or SequenceMatcher(None,written,heard).ratio() < .5:
+                    raise ValueError("ASR word counts differ; retry speech or provide reviewed word timings.")
+                start,end=spoken_units[a]["start"],spoken_units[b-1]["end"]
+                for k in range(i,j):
+                    share=(end-start)/(j-i)
+                    matches.append((script_units[k][1],{"start":start+share*(k-i),"end":start+share*(k-i+1)}))
+                continue
             matches.extend((script_units[k][1],spoken_units[a+k-i]) for k in range(i,j))
     grouped={index:[] for index in range(len(script))}
     for index,word in matches:

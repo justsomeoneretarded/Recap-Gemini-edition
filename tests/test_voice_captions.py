@@ -173,3 +173,21 @@ def test_rejected_generated_speech_retains_bounded_audio_transcript_and_error(tm
     assert len(calls)==(2 if recover else 4)
     # Failed attempts never acquire success metadata or masquerade as cache hits.
     assert len(list((tmp_path/'speech').glob('*.json')))==(1 if recover else 0)
+
+
+def test_asr_tokenization_differences_get_estimated_timings_but_skips_still_fail():
+    # A realistic beat: Whisper heard "gonna" where the script says "going to" (same speech).
+    script='The killers close in on the hotel, and he knows they are going to find him before the clock runs out tonight.'
+    heard=script.replace('going to','gonna').split()
+    recognized=[{'word':w,'start':i*.3,'end':i*.3+.25} for i,w in enumerate(heard)]
+    aligned=_align_script(script,recognized,len(heard)*.3)
+    assert [w['word'] for w in aligned]==script.split()
+    going,to=aligned[12],aligned[13]
+    assert (going['word'],to['word'])==('going','to')
+    assert going['start']==pytest.approx(recognized[12]['start']) and to['end']==pytest.approx(recognized[12]['end'])
+    assert going['end']==pytest.approx(to['start'])
+    # A genuinely different word is not papered over.
+    heard=script.replace('going to','happy').split()
+    recognized=[{'word':w,'start':i*.3,'end':i*.3+.25} for i,w in enumerate(heard)]
+    with pytest.raises(ValueError,match='word counts differ'):
+        _align_script(script,recognized,len(heard)*.3)
