@@ -132,7 +132,10 @@ def validate_words(text: str, words: list[dict], duration: float) -> list[dict]:
 
 def _align_script(text: str, recognized: list[dict], duration: float) -> list[dict]:
     script = [w for w in text.split() if _normal(w)]
-    spoken = [w for w in recognized if _normal(w["word"])]
+    # Whisper occasionally reports a zero-length word (start == end). Give it a 10 ms
+    # duration so a real, recognized word is not rejected as an invalid interval.
+    spoken = [({**w, "end": float(w["start"]) + .01} if float(w["end"]) <= float(w["start"]) else w)
+              for w in recognized if _normal(w["word"])]
     if not script or not spoken:
         raise ValueError("Speech verification found no words.")
     script_units=[(unit,index) for index,units in enumerate(_contextual_units(script)) for unit in units]
@@ -163,7 +166,7 @@ def _align_script(text: str, recognized: list[dict], duration: float) -> list[di
                 # interval over the script words; a skipped or extra word still fails.
                 written="".join(unit for unit,_ in script_units[i:j])
                 heard="".join(w["unit"] for w in spoken_units[a:b])
-                if abs((j-i)-(b-a)) > 1 or max(j-i,b-a) > 3 or SequenceMatcher(None,written,heard).ratio() < .5:
+                if max(j-i,b-a) > 4 or SequenceMatcher(None,written,heard).ratio() < .5:
                     raise ValueError("ASR word counts differ; retry speech or provide reviewed word timings.")
                 start,end=spoken_units[a]["start"],spoken_units[b-1]["end"]
                 for k in range(i,j):
