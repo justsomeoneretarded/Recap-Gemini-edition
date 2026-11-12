@@ -167,8 +167,12 @@ class Run:
             return
         measured = sum(len(b["words"]) for b in narration) / seconds
         data = self._calibration()
-        data[self._voice_key()] = round(measured, 3)
-        _write_json(self.workdir / "gemini" / "cache" / "voice-rate.json", data)
+        stored = data.get(self._voice_key())
+        # Keep planning stable across runs: the word budget (and so the cached script) changes only
+        # when the voice is measurably different, not on every run's small variation (run 11).
+        if not stored or abs(measured - stored) / stored > 0.05:
+            data[self._voice_key()] = round(measured, 3)
+            _write_json(self.workdir / "gemini" / "cache" / "voice-rate.json", data)
         self.measured_rate = measured
 
     def place(self, beats: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:

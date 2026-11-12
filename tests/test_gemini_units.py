@@ -659,3 +659,34 @@ def test_a_later_beat_retelling_the_same_event_is_dropped():
     result = _drop_repeats(run, beats)
     assert [s["sentence_id"] for b in result for s in b["sentences"]] == ["N03.1", "N03.2", "N04.3"]
     assert "duration" not in result[1] and run.history[0]["action"] == "remove_repeated_sentence"
+
+
+def test_looping_response_is_reasked_then_handed_to_the_next_model(tmp_path):
+    # Run 11: gemini-3.1-flash-lite wrote a valid script start, then "1234567890..." until the
+    # 65,536-token limit, twice; raising the limit only bought a longer loop.
+    from shorts_pipeline.gemini.client import GeminiDegenerateOutput, _looping
+
+    loop = '{"title": "Everyone Wants Him Dead", "beats": [{"text": "John Wick ' + "1234567890" * 200
+    assert _looping(loop) and not _looping(json.dumps({"beats": [{"text": "x " * 40, "n": i} for i in range(80)]}, indent=2))
+
+    class Looping(Scripted):
+        def generate(self, model, parts, **kwargs):
+            self.calls += 1
+            self.seen = getattr(self, "seen", []) + [(model, kwargs["max_output_tokens"], kwargs["temperature"])]
+            item = self.results.pop(0)
+            return {"text": item if isinstance(item, str) else json.dumps(item),
+                    "finish_reason": "MAX_TOKENS" if item is loop else "STOP", "prompt_tokens": 10,
+                    "cached_tokens": 0, "output_tokens": 10, "thinking_tokens": 0, "audio_tokens": 0}
+
+    transport = Looping([loop, loop, REVIEW])
+    client = make_client(tmp_path, transport)
+    first, second = client.settings.model_preferences["review"][:2]
+    client.settings.model_preferences["review"] = [first, second]
+    assert client.generate("review", QualityReview, [text_part("x")], system="s").verdict == "pass"
+    (m1, limit1, t1), (m2, limit2, t2), (m3, _, _) = transport.seen
+    assert m1 == m2 == first and limit2 == limit1 and t2 > t1 and m3 == second  # no limit doubling
+    transport = Looping([loop, loop])
+    client = make_client(tmp_path / "b", transport)
+    client.settings.model_preferences["review"] = [first]
+    with pytest.raises(GeminiDegenerateOutput):
+        client.generate("review", QualityReview, [text_part("x")], system="s")
