@@ -11,6 +11,7 @@ import copy
 import hashlib
 import json
 import math
+import re
 import time
 from pathlib import Path
 from typing import Callable
@@ -275,7 +276,7 @@ def _timing_loop(run: Run, beats: list[dict]) -> list[dict]:
                 continue
             match = run.matches.get(sid, {"sentence_id": sid, "verdict": "unsupported", "shots": []})
             known = {(sh["start"], sh["end"]) for sh in match.get("shots", [])}
-            extra = [sh for sh in _event_footage(run, sentences[sid]) if (sh["start"], sh["end"]) not in known]
+            extra = _event_footage(run, sentences[sid], max(0.5, short["needed"] - short["available"]), known)
             event_extended.add(sid)
             if extra:
                 run.matches[sid] = {**match, "shots": list(match.get("shots", [])) + extra}
@@ -515,8 +516,13 @@ def run_gemini_pipeline(request: dict, source: Path, source_duration: float, wor
 RENDER_MIN_FOOTAGE = 0.86  # The renderer may slow footage to 0.85x at most; never hand it less.
 
 
-def _event_footage(run: Run, sentence: dict) -> list[dict]:
-    """Shots covered by a sentence's own verified events: the evidence-backed last resort."""
+def _event_footage(run: Run, sentence: dict, need: float | None = None, known: set | frozenset = frozenset()) -> list[dict]:
+    """Shots covered by a sentence's own verified events: the evidence-backed last resort.
+
+    With `need` (seconds), only the shots nearest each event's peak are taken, just enough
+    to cover it: a long event (run 10: a 53 s taxi-and-library event) must not pour
+    unrelated footage under one sentence.
+    """
     events = {e["id"]: e for e in run.inventory["events"]}
     shots = []
     for ident in sentence.get("event_ids", []):
@@ -525,14 +531,30 @@ def _event_footage(run: Run, sentence: dict) -> list[dict]:
             continue
         for scene in run.scenes:
             a, b = float(scene["start"]), float(scene["end"])
-            if b > event["start"] and a < event["end"]:
+            if b > event["start"] and a < event["end"] and (a, b) not in known:
+                peak = float(event.get("peak", (event["start"] + event["end"]) / 2))
                 shots.append({"shot_id": scene["id"], "start": a, "end": b,
-                              "anchor": round(min(max(float(event.get("peak", (a + b) / 2)), a), b), 3),
+                              "anchor": round(min(max(peak, a), b), 3),
                               "focus_x": event.get("focus_x", 0.5), "shows": event["visible_action"],
                               "reason": "verified event footage added to cover the measured narration",
                               "relevance": 0.6, "event_id": ident, "shot_bounds": [a, b],
-                              "fallback_from_event": True})
+                              "fallback_from_event": True, "_distance": abs((a + b) / 2 - peak)})
+    if need is not None and shots:
+        chosen, total = [], 0.0
+        for shot in sorted(shots, key=lambda sh: sh["_distance"]):
+            if total >= need * 1.3:
+                break
+            chosen.append(shot)
+            total += shot["end"] - shot["start"]
+        shots = sorted(chosen, key=lambda sh: sh["start"])
+    for shot in shots:
+        shot.pop("_distance", None)
     return shots
+
+
+def _sentence_need(run: Run, sentence: dict) -> float:
+    rate = getattr(run, "measured_rate", None) or run.rate
+    return count_words(sentence["text"]) / max(rate, 0.5)
 
 
 def _finalize_placement(run: Run, beats: list[dict]):
@@ -543,6 +565,7 @@ def _finalize_placement(run: Run, beats: list[dict]):
     and its beat re-voiced. Nothing renders with a known footage shortfall.
     """
     extended: set[str] = set()
+    beats = _drop_repeats(run, beats)
     for _ in range(5):
         beats = _drop_unsupported(run, beats)
         if any(b["kind"] == "narration" and not b.get("words") for b in beats):
@@ -556,9 +579,9 @@ def _finalize_placement(run: Run, beats: list[dict]):
         for entry in short:
             sid = entry["sentence_id"]
             match = run.matches.get(sid, {"sentence_id": sid, "verdict": "unsupported", "shots": []})
-            extra = [] if sid in extended else _event_footage(run, sentences[sid])
             known = {(sh["start"], sh["end"]) for sh in match.get("shots", [])}
-            extra = [sh for sh in extra if (sh["start"], sh["end"]) not in known]
+            extra = [] if sid in extended else _event_footage(
+                run, sentences[sid], max(0.5, entry["estimated_seconds"] - entry["footage_seconds"]), known)
             if extra:
                 extended.add(sid)
                 run.matches[sid] = {**match, "shots": list(match.get("shots", [])) + extra}
@@ -572,6 +595,53 @@ def _finalize_placement(run: Run, beats: list[dict]):
                 run.record(stage="F", action="remove_short_sentence", sentence_id=sid,
                            needed=entry["estimated_seconds"], had=entry["footage_seconds"], outcome="removed")
     raise ValueError("Footage placement did not converge: some sentences never had enough verified footage.")
+
+
+_STOP = frozenset("the a an and or but of to in on at by for with into onto from as his her its their he she it they "
+                  "him them is are was were be been this that then than while who what where when john".split())
+
+
+def _content_words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z']+", text.lower()) if len(w) > 2 and w not in _STOP}
+
+
+def _drop_repeats(run: Run, beats: list[dict]) -> list[dict]:
+    """Remove a sentence that re-narrates an event an earlier beat already told.
+
+    Run 10 narrated the taxi twice in neighbouring beats. A sentence is a repeat when every
+    event it cites was already narrated in an earlier beat and at least half of its content
+    words were already said about those events.
+    """
+    said: dict[str, set[str]] = {}
+    result = []
+    for beat in beats:
+        if beat["kind"] != "narration":
+            result.append(beat)
+            continue
+        keep, removed, here = [], [], {}
+        for sentence in beat["sentences"]:
+            events = [e for e in sentence.get("event_ids", []) if e]
+            words = _content_words(sentence["text"])
+            earlier = set().union(*(said.get(e, set()) for e in events)) if events else set()
+            if (events and all(e in said for e in events) and words
+                    and len(words & earlier) / len(words) >= 0.5):
+                removed.append(sentence)
+                continue
+            keep.append(sentence)
+            for e in events:
+                here.setdefault(e, set()).update(words)
+        for e, words in here.items():
+            said.setdefault(e, set()).update(words)
+        if removed:
+            run.record(stage="F", action="remove_repeated_sentence", beat_id=beat["id"],
+                       sentences=[s["text"] for s in removed], outcome="removed")
+            if not keep:
+                continue
+            beat = {**beat, "sentences": keep, "text": " ".join(s["text"] for s in keep)}
+            for key in ("audio_path", "duration", "words", "timing_provenance"):
+                beat.pop(key, None)
+        result.append(beat)
+    return result
 
 
 def _drop_unsupported(run: Run, beats: list[dict]) -> list[dict]:

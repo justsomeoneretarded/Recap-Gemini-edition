@@ -595,7 +595,7 @@ def test_footage_fit_fix_adds_event_footage_instead_of_rewriting(tmp_path):
             self.scenes = [{"id": "S1", "start": 9.0, "end": 12.0}, {"id": "S2", "start": 12.0, "end": 15.0}]
             self.matches = {"N01.1": {"sentence_id": "N01.1", "verdict": "supported",
                                       "shots": [{"shot_id": "S1", "start": 9.0, "end": 12.0}]}}
-            self.rewrites = []
+            self.rewrites, self.rate = [], 2.5
 
         def rewrite(self, beats, beat_id, reason, **limits):
             self.rewrites.append(limits)
@@ -617,3 +617,45 @@ def test_footage_fit_fix_adds_event_footage_instead_of_rewriting(tmp_path):
     _fix(run, [beat], {**issue, "check": "unsupported_identity_or_dialogue", "fix": "rewrite_beat",
                        "sentence_id": "N01.1"})
     assert run.rewrites == [{"max_words": 16, "min_words": 8}]
+
+
+class _RecordingRun:
+    def __init__(self, events=(), scenes=()):
+        self.history, self.rate = [], 2.5
+        self.inventory = {"events": list(events)}
+        self.scenes = list(scenes)
+
+    def record(self, **entry):
+        self.history.append(entry)
+
+
+def test_long_event_fallback_takes_only_the_shots_nearest_its_peak():
+    # Run 10: one 53 s taxi-and-library event put 23 library shots under a taxi sentence.
+    from shorts_pipeline.gemini.pipeline import _event_footage
+
+    scenes = [{"id": f"S{i}", "start": float(i * 2), "end": float(i * 2 + 2)} for i in range(30)]
+    run = _RecordingRun([{"id": "EV1", "start": 0.0, "end": 60.0, "peak": 11.0, "visible_action": "taxi"}], scenes)
+    sentence = {"sentence_id": "N1.1", "text": "He gets in the taxi.", "event_ids": ["EV1"]}
+    assert len(_event_footage(run, sentence)) == 30
+    picked = _event_footage(run, sentence, need=3.0, known={(10.0, 12.0)})
+    assert [s["shot_id"] for s in picked] == ["S4", "S6"]
+
+
+def test_a_later_beat_retelling_the_same_event_is_dropped():
+    from shorts_pipeline.gemini.pipeline import _drop_repeats
+
+    def beat(ident, *sentences):
+        return {"id": ident, "kind": "narration", "text": " ".join(t for t, _ in sentences), "duration": 3.0,
+                "sentences": [{"sentence_id": f"{ident}.{i}", "text": t, "event_ids": e}
+                              for i, (t, e) in enumerate(sentences, 1)]}
+
+    beats = [beat("N03", ("Seeking a way out, he climbs into a waiting yellow taxi cab with his dog and hands "
+                          "the driver a gold coin.", ["EV12"]),
+                  ("John speaks urgently through the partition as the car pulls away.", ["EV12"])),
+             beat("N04", ("John climbs into the yellow taxi cab with his dog, seeking refuge from the streets.", ["EV12"]),
+                  ("He slides a gold coin through the partition to the driver.", ["EV12"]),
+                  ("John stays vigilant, watching passing lights on the ride toward an uncertain destination.", ["EV12"]))]
+    run = _RecordingRun()
+    result = _drop_repeats(run, beats)
+    assert [s["sentence_id"] for b in result for s in b["sentences"]] == ["N03.1", "N03.2", "N04.3"]
+    assert "duration" not in result[1] and run.history[0]["action"] == "remove_repeated_sentence"

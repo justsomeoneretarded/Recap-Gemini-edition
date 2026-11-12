@@ -25,14 +25,14 @@ def _issue_key(issue: dict) -> tuple:
 def _cover_beat(run, beats: list[dict], beat: dict) -> tuple[list[dict], str | None, str]:
     """A beat with too little footage first gets its own verified event shots; it is shortened
     only if those are already in use, and then by at most a quarter."""
-    from .pipeline import _event_footage
+    from .pipeline import _event_footage, _sentence_need
 
     added = []
     for sentence in beat["sentences"]:
         sid = sentence["sentence_id"]
         match = run.matches.get(sid, {"sentence_id": sid, "verdict": "unsupported", "shots": []})
         known = {(sh["start"], sh["end"]) for sh in match.get("shots", [])}
-        extra = [sh for sh in _event_footage(run, sentence) if (sh["start"], sh["end"]) not in known]
+        extra = _event_footage(run, sentence, _sentence_need(run, sentence), known)
         if extra:
             run.matches[sid] = {**match, "shots": list(match.get("shots", [])) + extra}
             added += [sh["shot_id"] for sh in extra]
