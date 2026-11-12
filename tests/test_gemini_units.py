@@ -737,3 +737,13 @@ def test_extra_keys_take_over_a_model_whose_daily_quota_is_used_up(tmp_path, mon
     # Only when every key has used up a model does the stage move to the next model.
     client._mark_exhausted(model)
     assert client._key_with_quota(model) is None and client._fallbacks("review", model)
+
+
+def test_invented_dialogue_is_dropped_when_no_dialogue_clip_is_approved():
+    # Run 12: the source has voice-over narration, so retained dialogue is disabled; flash-lite
+    # still wrote a dialogue beat "S_ELDER_001" and the draft failed validation twice.
+    beats = [_beat("He pries the crate open with both hands."), _beat("", kind="dialogue", speech="S_ELDER_001")]
+    result = validate_beats(beats, INVENTORY, {}, allowed_quotes=[], budget_words=None)
+    assert [b["kind"] for b in result] == ["narration"]
+    with pytest.raises(ValueError, match="not an approved dialogue clip"):
+        validate_beats(beats, INVENTORY, POOL, allowed_quotes=["D1"], budget_words=None)
