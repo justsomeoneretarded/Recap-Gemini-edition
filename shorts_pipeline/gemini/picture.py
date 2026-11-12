@@ -227,13 +227,14 @@ def validate_picture(result: PictureScript, clips: list[dict], rate: float, budg
         last = index[-1]
         used |= set(ids)
         words = count_words(line.text)
-        limit = math.ceil(_capacity(ids, by_id, rate) * 1.1) + 1
+        limit = math.ceil(_capacity(ids, by_id, rate) * 1.25) + 1
         if not 3 <= words <= limit:
             raise ValueError(f"line {number} has {words} words but its clips fit 3–{limit}")
-        if not _has_word(line.text, line.key_word):
-            raise ValueError(f"line {number} key_word {line.key_word!r} does not appear in its text")
+        # A key word that is not in the line only disables word-to-action timing for that line;
+        # it is not a reason to throw away the whole footage-first script.
+        key_word = line.key_word if _has_word(line.text, line.key_word) else ""
         lines.append({"line_id": f"L{number:02d}", "clip_ids": ids, "text": " ".join(line.text.split()),
-                      "key_word": line.key_word, "event_ids": sorted({by_id[i]["event_id"] for i in ids}),
+                      "key_word": key_word, "event_ids": sorted({by_id[i]["event_id"] for i in ids}),
                       "capacity_words": limit})
     total = sum(count_words(l["text"]) for l in lines)
     if total < 0.4 * budget_high:
@@ -293,7 +294,7 @@ def validate_reconciled(result: ReconciledScript, *, lines: list[dict], clips: l
                 used_lines.add(line.source_line_id)
                 key = line.key_word or source["key_word"]
                 if not _has_word(line.text, key):
-                    raise ValueError(f"action line {line.source_line_id} must keep a key word in its text ({key!r})")
+                    key = ""  # Timing to the action is skipped for this line; its clips stay bound.
                 events = source["event_ids"]
             else:
                 bad = [c for c in line.clip_ids if c not in cover_pool or c in used_cover]
