@@ -126,6 +126,7 @@ class GeminiSettings:
     request_timeout_seconds: int = 600
     max_retries: int = 4
     overload_attempts: int = 3  # 503/504 tries on one model before moving to the next candidate
+    overload_wait_seconds: float = 1200.0  # When every candidate is overloaded: wait and cycle back, up to this long
     max_output_repairs: int = 1
     max_rewrite_attempts: int = 2
     max_timing_repairs: int = 2

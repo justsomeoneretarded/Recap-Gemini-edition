@@ -8,7 +8,7 @@ from shorts_pipeline.gemini.analysis import (_fix_relative_times, dialogue_suppo
                                              validate_events, verify_events)
 from shorts_pipeline.gemini.client import (BudgetExceeded, CostLedger, GeminiAuthError, GeminiClient,
                                            GeminiModelUnavailable, GeminiOutputError, GeminiRateLimited,
-                                           GeminiTimeout, UploadedFile, text_part)
+                                           GeminiOverloaded, GeminiTimeout, UploadedFile, text_part)
 from shorts_pipeline.gemini.matching import plan_shots, validate_choices
 from shorts_pipeline.gemini.review import deterministic_checks
 from shorts_pipeline.gemini.schemas import (EditorialPlan, QualityReview, ScriptBeat, ScriptSentence, StoryMap)
@@ -99,6 +99,7 @@ def test_rate_limits_and_timeouts_retry_then_succeed_or_fail_clearly(tmp_path):
     client = make_client(tmp_path / "b", Scripted([FakeAPIError("timeout", "deadline")] * 5))
     only = client.settings.model_preferences["review"][-1]
     client.settings.model_preferences["review"] = [only]  # No other model: the full retry budget is used.
+    client.settings.overload_wait_seconds = 0  # ...and no waiting to cycle back.
     with pytest.raises(GeminiTimeout, match="after 5 attempt"):
         client.generate("review", QualityReview, [text_part("x")], system="s")
     client = make_client(tmp_path / "c", Scripted([FakeAPIError("rate_limit", "429")] * 5))
@@ -518,6 +519,7 @@ def test_overloaded_model_switches_to_the_next_candidate(tmp_path):
     assert client.settings.resolved_models["review"] == "gemini-2.5-flash"
     stuck = make_client(tmp_path / "b", Scripted([busy] * 7, models=["gemini-2.5-flash"]), gemini_preset="free")
     stuck.resolve_models()
+    stuck.settings.overload_wait_seconds = 0  # Once the overload wait budget is spent, fail clearly.
     with pytest.raises(GeminiOverloaded, match="rerun later"):
         stuck.generate("review", QualityReview, [text_part("x")], system="s")
 
@@ -747,3 +749,37 @@ def test_invented_dialogue_is_dropped_when_no_dialogue_clip_is_approved():
     assert [b["kind"] for b in result] == ["narration"]
     with pytest.raises(ValueError, match="not an approved dialogue clip"):
         validate_beats(beats, INVENTORY, POOL, allowed_quotes=["D1"], budget_words=None)
+
+
+def test_when_every_model_is_overloaded_the_run_waits_and_starts_again_from_the_best(tmp_path):
+    # Run 13: 503s on every candidate walked the stage to the last model (a 404) and the run failed.
+    waits = []
+    busy = [FakeAPIError("server", "503 UNAVAILABLE high demand")]
+    client = make_client(tmp_path, Scripted(busy * 3 + busy * 5 + [REVIEW]))
+    client.sleep = waits.append
+    first, second = client.settings.model_preferences["review"][:2]
+    client.settings.model_preferences["review"] = [first, second]
+    assert client.generate("review", QualityReview, [text_part("x")], system="s").verdict == "pass"
+    cycle = [e for e in client.ledger.events if e["kind"] == "overload_cycle"]
+    assert len(cycle) == 1 and cycle[0]["restart_with"] == first and 30.0 in waits
+    assert client.settings.resolved_models["review"] == first
+
+
+def test_a_not_found_model_is_skipped_for_the_rest_of_the_run(tmp_path):
+    busy = FakeAPIError("server", "503 UNAVAILABLE high demand")
+    gone = FakeAPIError("model", "404 NOT_FOUND no longer available to new users")
+    transport = Scripted([gone] + [busy] * 5 + [REVIEW])
+    client = make_client(tmp_path, transport)
+    seen = []
+    original = transport.generate
+    transport.generate = lambda model, parts, **kw: (seen.append(model), original(model, parts, **kw))[1]
+    first, second = client.settings.model_preferences["review"][:2]
+    client.settings.model_preferences["review"] = [first, second]
+    client.generate("review", QualityReview, [text_part("x")], system="s")
+    assert seen[0] == first and set(seen[1:]) == {second}  # The 404 model is never retried after the wait.
+    # With no live model left, the overload still fails clearly instead of waiting forever.
+    client = make_client(tmp_path / "b", Scripted([busy] * 20))
+    client.settings.model_preferences["review"] = [first]
+    client.settings.overload_wait_seconds = 0
+    with pytest.raises(GeminiOverloaded):
+        client.generate("review", QualityReview, [text_part("x")], system="s")
