@@ -471,27 +471,34 @@ class GeminiClient:
             current = self.settings.resolved_models.get(base) or self.settings.model_preferences[base][0]
             if current in self._exhausted_today():
                 current = self._switch(base, current, f"{current} already used up its daily quota today")
+            # With no other model to move to, an overload is waited out with the full retry budget.
+            patient = not self._fallbacks(base, current)
             try:
-                return self._generate(stage, schema, parts, system=system, model=current, **kwargs)
-            except (GeminiModelUnavailable, GeminiQuotaExhausted) as exc:
+                return self._generate(stage, schema, parts, system=system, model=current, patient=patient, **kwargs)
+            except (GeminiModelUnavailable, GeminiQuotaExhausted, GeminiTimeout) as exc:
                 if isinstance(exc, GeminiQuotaExhausted):
                     self._mark_exhausted(current)
                 self._switch(base, current, str(exc), exc)
 
-    def _switch(self, base: str, current: str, reason: str, exc: Exception | None = None) -> str:
-        """Move a stage to its next usable model candidate (quotas are per model)."""
+    def _fallbacks(self, base: str, current: str) -> list[str]:
         candidates = list(self.settings.model_preferences[base])
         later = candidates[candidates.index(current) + 1:] if current in candidates else []
         exhausted = self._exhausted_today()
-        usable = [m for m in later if (self.available_models is None or m in self.available_models)
-                  and m not in exhausted]
+        return [m for m in later if (self.available_models is None or m in self.available_models)
+                and m not in exhausted]
+
+    def _switch(self, base: str, current: str, reason: str, exc: Exception | None = None) -> str:
+        """Move a stage to its next usable model candidate (quotas are per model)."""
+        candidates = list(self.settings.model_preferences[base])
+        exhausted = self._exhausted_today()
+        usable = self._fallbacks(base, current)
         if not usable:
             if isinstance(exc, GeminiQuotaExhausted) or current in exhausted:
                 raise GeminiQuotaExhausted(
                     f"Every {base} model candidate ({', '.join(candidates)}) has used up its daily free-tier "
                     "quota. Completed stages are cached: rerun after the quota resets (midnight Pacific time) "
                     "to resume.") from exc
-            error = GeminiOverloaded if isinstance(exc, GeminiOverloaded) else GeminiModelUnavailable
+            error = type(exc) if isinstance(exc, (GeminiOverloaded, GeminiTimeout)) else GeminiModelUnavailable
             raise error(f"{reason} No further {base} model candidates remain "
                         f"({', '.join(candidates)}). Completed stages are cached; rerun later to resume.") from exc
         self.settings.resolved_models[base] = usable[0]
@@ -536,7 +543,8 @@ class GeminiClient:
 
     def _generate(self, stage: str, schema: type[BaseModel], parts: list[dict], *, system: str, model: str,
                   temperature: float = 0.3, max_output_tokens: int = 8192, resolution: str | None = None,
-                  thinking: str | None = "medium", cached_prefix: list[dict] | None = None) -> BaseModel:
+                  thinking: str | None = "medium", cached_prefix: list[dict] | None = None,
+                  patient: bool = False) -> BaseModel:
         prefix = cached_prefix or []
         def identity_for(name: str) -> str:
             return hashlib.sha256(json.dumps({
@@ -598,7 +606,10 @@ class GeminiClient:
                         raise GeminiQuotaExhausted(
                             f"The daily Gemini quota for {model} is used up ({stage}). Completed stages are cached: "
                             f"rerun after the quota resets (midnight Pacific time) to resume. {message[:300]}") from exc
-                if category in ("rate_limit", "timeout", "server") and attempt <= self.settings.max_retries:
+                # An overloaded or stalled model is abandoned sooner: the next candidate is usually free.
+                limit = self.settings.max_retries if category == "rate_limit" or patient else min(
+                    self.settings.max_retries, self.settings.overload_attempts - 1)
+                if category in ("rate_limit", "timeout", "server") and attempt <= limit:
                     reasons.append(f"{category}: {message[:160]}")
                     delay = min(60.0, 2.0 * 2 ** (attempt - 1)) * (0.75 + 0.5 * random.random())
                     suggested = _retry_delay(message) if category == "rate_limit" else None

@@ -472,6 +472,9 @@ def run_gemini_pipeline(request: dict, source: Path, source_duration: float, wor
     # G — measured narration and synchronization
     log("Gemini: narration synthesis and synchronization")
     beats = _timing_loop(run, beats)
+    # Every sentence gets enough verified footage before review, so the reviewer never sees
+    # a coverage gap that a footage fallback would close (and never rewrites to hide one).
+    beats, _, _ = _finalize_placement(run, beats)
     # H + I — independent review and bounded targeted corrections
     beats, issues, summaries = correction_loop(run, beats)
     beats, evidence, shortfalls = _finalize_placement(run, beats)
