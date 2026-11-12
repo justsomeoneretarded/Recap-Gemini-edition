@@ -690,3 +690,50 @@ def test_looping_response_is_reasked_then_handed_to_the_next_model(tmp_path):
     client.settings.model_preferences["review"] = [first]
     with pytest.raises(GeminiDegenerateOutput):
         client.generate("review", QualityReview, [text_part("x")], system="s")
+
+
+def test_extra_keys_take_over_a_model_whose_daily_quota_is_used_up(tmp_path, monkeypatch):
+    from shorts_pipeline.gemini.client import _redact, api_keys, video_part
+
+    monkeypatch.setenv("GEMINI_API_KEY", "primary-key-000000")
+    monkeypatch.setenv("GEMINI_API_KEY_2", "second-key-1111111")
+    monkeypatch.setenv("GEMINI_API_KEY_3", "")
+    assert api_keys() == ["primary-key-000000", "second-key-1111111"]
+    assert "second-key" not in _redact("bad key second-key-1111111")
+
+    daily = "Quota exceeded: GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+
+    class Keyed(Scripted):
+        def __init__(self, label, results):
+            super().__init__(results)
+            self.label, self.seen = label, []
+
+        def generate(self, model, parts, **kwargs):
+            self.seen.append((model, [p.get("file_uri") for p in parts if "file_uri" in p]))
+            return super().generate(model, parts, **kwargs)
+
+        def upload(self, path, mime):
+            self.uploaded += 1
+            return {"name": f"files/{self.label}", "uri": f"uri-{self.label}", "mime_type": mime, "state": "ACTIVE",
+                    "expires_epoch": 4e9}
+
+    first, second = Keyed("k1", [FakeAPIError("rate_limit", daily)]), Keyed("k2", [REVIEW, REVIEW])
+    settings = settings_from_request({"gemini_preset": "free"})
+    client = GeminiClient(settings, CostLedger(5.0, tmp_path / "cost.json", free_tier=True), tmp_path / "cache",
+                          first, sleep=lambda s: None, transports=[second])
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"0" * 100)
+    part = video_part(client.upload(video))
+    model = settings.model_preferences["review"][0]
+    client.generate("review", QualityReview, [part, text_part("x")], system="s")
+    # Same model, second key, with the footage uploaded again under the second key's project.
+    assert first.seen[0] == (model, ["uri-k1"]) and second.seen[0] == (model, ["uri-k2"])
+    assert client.key_index == 1 and second.uploaded == 1
+    assert any(e["kind"] == "api_key_switch" and e["to_key"] == 2 for e in client.ledger.events)
+    assert model in client._exhausted_today(0) and model not in client._exhausted_today(1)
+    # A later call starts on the second key and reuses its upload.
+    client.generate("review", QualityReview, [part, text_part("y")], system="s")
+    assert second.uploaded == 1 and second.seen[1] == (model, ["uri-k2"])
+    # Only when every key has used up a model does the stage move to the next model.
+    client._mark_exhausted(model)
+    assert client._key_with_quota(model) is None and client._fallbacks("review", model)
