@@ -77,7 +77,13 @@ def _fix(run, beats: list[dict], issue: dict) -> tuple[list[dict], str | None, s
             run.matches[sid] = {**run.matches[sid], "shots": shots}
             return beats, beat_id, f"dropped weakest shot {dropped['shot_id']} so the key action gets more screen time"
         exclude = current if issue["check"] in ("shot_mismatch", "repetition") else []
+        previous = run.matches.get(sid)
         run.rematch(beats, {sid}, wide=True, exclude={sid: exclude})
+        if previous and previous.get("shots") and not run.matches.get(sid, {}).get("shots"):
+            # No better footage exists: keep what the sentence had rather than deleting the line
+            # (run 14 lost its bounty and Winston sentences this way).
+            run.matches[sid] = previous
+            return beats, None, f"no better footage for {sid}; kept its current shots for human review"
         return beats, beat_id, f"re-matched {sid} excluding {exclude or 'nothing'}"
     if fix in ("rewrite_beat", "remove_claim", "revise_opening", "restructure", "rematch_shot", "retime"):
         reason = issue["description"]

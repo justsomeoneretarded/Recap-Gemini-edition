@@ -783,3 +783,27 @@ def test_a_not_found_model_is_skipped_for_the_rest_of_the_run(tmp_path):
     client.settings.overload_wait_seconds = 0
     with pytest.raises(GeminiOverloaded):
         client.generate("review", QualityReview, [text_part("x")], system="s")
+
+
+def test_a_rematch_that_finds_nothing_keeps_the_sentence_and_its_shots():
+    # Run 14: re-matching the bounty and Winston sentences while excluding their shots found
+    # nothing, so both sentences were deleted and the Short fell to 27 s.
+    from shorts_pipeline.gemini.correction import _fix
+
+    class StubRun:
+        def __init__(self):
+            self.matches = {"N03.1": {"sentence_id": "N03.1", "verdict": "supported",
+                                      "shots": [{"shot_id": "S0018", "start": 37.0, "end": 40.5}]}}
+
+        def rematch(self, beats, ids, **kwargs):
+            for sid in ids:
+                self.matches[sid] = {"sentence_id": sid, "verdict": "unsupported", "shots": []}
+
+    run = StubRun()
+    beat = {"id": "N03", "kind": "narration", "text": "A bounty goes live.",
+            "sentences": [{"sentence_id": "N03.1", "text": "A bounty goes live.", "event_ids": ["EV5"]}],
+            "shots": [{"shot_id": "S0018", "sentence_id": "N03.1"}]}
+    issue = {"check": "shot_mismatch", "severity": "major", "fix": "rematch_shot", "beat_id": "N03",
+             "sentence_id": "N03.1", "description": "footage shows a fight"}
+    _, changed, action = _fix(run, [beat], issue)
+    assert changed is None and "kept" in action and run.matches["N03.1"]["shots"][0]["shot_id"] == "S0018"
