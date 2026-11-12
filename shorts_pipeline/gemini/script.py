@@ -76,6 +76,10 @@ def validate_beats(beats: list[ScriptBeat], inventory: dict, speech_pool: dict, 
     narration_number = dialogue_number = 0
     for beat in beats:
         if beat.kind == "dialogue":
+            if not allowed_quotes:
+                # No dialogue clip is approved (e.g. the source has voice-over narration): an
+                # invented clip is dropped rather than failing the draft (run 12).
+                continue
             if beat.speech_id not in speech_pool or beat.speech_id not in allowed_quotes:
                 raise ValueError(f"dialogue beat {beat.beat_id} uses speech_id {beat.speech_id!r}, which is not "
                                  f"an approved dialogue clip {allowed_quotes}")

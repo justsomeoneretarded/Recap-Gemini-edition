@@ -15,10 +15,11 @@ The style profile comes from eight owner-supplied references, analysed in [refer
 
 1. In this repository open **Settings → Secrets and variables → Actions**.
 2. Choose **New repository secret**, name it **`GEMINI_API_KEY`**, paste the key and save.
-3. Optional: under the **Variables** tab, add `GEMINI_PRICES_JSON` with current list prices from the Gemini pricing page. This makes the cost report exact rather than conservative, for example:
+3. Optional: add more free-tier keys as **`GEMINI_API_KEY_2`** and **`GEMINI_API_KEY_3`**. Daily quotas are counted per key (per Google Cloud project), so when a model's daily quota is used up on one key, the run keeps the same model on the next key. The footage is uploaded again under that key, because uploads belong to one project. It moves to a smaller model only when every key has used up the current one. Keys from the same Google Cloud project share one quota, so create each in a separate project.
+4. Optional: under the **Variables** tab, add `GEMINI_PRICES_JSON` with current list prices from the Gemini pricing page. This makes the cost report exact rather than conservative, for example:
    `{"gemini-3.8-flash": {"input": 0.5, "output": 3.0, "cached": 0.05, "audio": 1.0}}`
 
-The workflow passes the secret only to the key check and the generate step. It is never echoed, and error messages redact it.
+The workflow passes the secrets only to the key check and the generate step. They are never echoed, and error messages redact them. The cost report names keys only by number.
 
 ## 3. Generate a Short on GitHub
 

@@ -94,11 +94,28 @@ def _retry_delay(message: str) -> float | None:
     return float(match.group(1)) if match else None
 
 
+KEY_VARIABLES = ("GEMINI_API_KEY",) + tuple(f"GEMINI_API_KEY_{n}" for n in range(2, 10))
+
+
+def api_keys() -> list[str]:
+    """The configured keys in order: GEMINI_API_KEY, then GEMINI_API_KEY_2, _3, ... (blank and repeats skipped).
+
+    Free-tier quotas are per key (per Google Cloud project), so later keys take over a
+    model whose daily quota the earlier ones have used up.
+    """
+    keys: list[str] = []
+    for name in KEY_VARIABLES:
+        key = os.getenv(name, "").strip()
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
 def _redact(text: str) -> str:
-    key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     text = str(text)
-    if key and len(key) >= 8:
-        text = text.replace(key, "[REDACTED]")
+    for key in api_keys() + [os.getenv("GOOGLE_API_KEY", "").strip()]:
+        if key and len(key) >= 8:
+            text = text.replace(key, "[REDACTED]")
     return text
 
 
@@ -124,7 +141,7 @@ def text_part(text: str) -> dict:
 
 def video_part(file: "UploadedFile", start: float | None = None, end: float | None = None,
                fps: float | None = None) -> dict:
-    part = {"file_uri": file.uri, "mime_type": file.mime_type, "file_sha256": file.sha256}
+    part = {"file_uri": file.uri, "mime_type": file.mime_type, "file_sha256": file.sha256, "file_key": file.key}
     if start is not None:
         part["start"] = round(max(0.0, float(start)), 3)
     if end is not None:
@@ -238,6 +255,7 @@ class UploadedFile:
     uri: str
     mime_type: str
     sha256: str
+    key: str = ""  # Fingerprint of the key whose project holds the upload.
 
 
 class SdkTransport:
@@ -359,24 +377,74 @@ class SdkTransport:
 # ------------------------------------------------------------------ client
 class GeminiClient:
     def __init__(self, settings: GeminiSettings, ledger: CostLedger, cache_dir: Path,
-                 transport=None, sleep: Callable[[float], None] | None = None):
+                 transport=None, sleep: Callable[[float], None] | None = None, transports=None):
         self.settings, self.ledger = settings, ledger
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.sleep = sleep or (lambda seconds: time.sleep(seconds))
         if transport is None:
-            key = os.getenv("GEMINI_API_KEY", "").strip()
-            if not key:
+            keys = api_keys()
+            if not keys:
                 raise GeminiAuthError(
                     "GEMINI_API_KEY is not set. Create a key in Google AI Studio and add it as the "
                     "GEMINI_API_KEY repository secret (Actions) or a local environment variable. "
                     "Or run with planner=local to use the local Gemma pipeline.")
-            transport = SdkTransport(key, settings.request_timeout_seconds)
-        self.transport = transport
+            timeout = settings.request_timeout_seconds
+            # Transports are built lazily; only a short fingerprint of each key is ever stored or logged.
+            self._key_slots = [{"fingerprint": hashlib.sha256(k.encode()).hexdigest()[:12],
+                                "make": (lambda k=k: SdkTransport(k, timeout)), "transport": None} for k in keys]
+        else:
+            extra = list(transports or [])
+            self._key_slots = [{"fingerprint": f"key{i + 1}", "make": None, "transport": t}
+                               for i, t in enumerate([transport] + extra)]
+        self.key_index = 0
+        self.transport = self._slot_transport(0)
+        self._upload_paths: dict[str, Path] = {}
+        self._remapped: dict[tuple, UploadedFile] = {}
         self._context_caches: dict[str, str] = {}
         self.available_models: set[str] | None = None
         self.requests_sent = 0
         self._last_request = 0.0
+
+    # ---- API keys
+    def _slot_transport(self, index: int):
+        slot = self._key_slots[index]
+        if slot["transport"] is None:
+            slot["transport"] = slot["make"]()
+        return slot["transport"]
+
+    @property
+    def key_count(self) -> int:
+        return len(self._key_slots)
+
+    def _fingerprint(self, index: int | None = None) -> str:
+        return self._key_slots[self.key_index if index is None else index]["fingerprint"]
+
+    def _key_with_quota(self, model: str) -> int | None:
+        """Another key whose daily quota for `model` is not known to be used up today."""
+        for index in range(self.key_count):
+            if index != self.key_index and model not in self._exhausted_today(index):
+                return index
+        return None
+
+    def _use_key(self, index: int, reason: str) -> None:
+        self.ledger.note(kind="api_key_switch", from_key=self.key_index + 1, to_key=index + 1, reason=reason[:300])
+        self.key_index = index
+        self.transport = self._slot_transport(index)
+        self._context_caches.clear()  # Caches belong to the key's project.
+
+    def _for_current_key(self, parts: list[dict]) -> list[dict]:
+        """Uploaded media lives in one key's project: re-upload it under the current key when needed."""
+        result = []
+        for part in parts:
+            sha = part.get("file_sha256")
+            if sha and part.get("file_key") != self._fingerprint() and sha in self._upload_paths:
+                memo = (sha, self._fingerprint())
+                if memo not in self._remapped:
+                    self._remapped[memo] = self.upload(self._upload_paths[sha], part.get("mime_type"))
+                part = {**part, "file_uri": self._remapped[memo].uri, "file_key": self._fingerprint()}
+            result.append(part)
+        return result
 
     # ---- models
     def resolve_models(self) -> dict[str, str]:
@@ -412,15 +480,19 @@ class GeminiClient:
         path = Path(path)
         digest = _sha256(path)
         mime_type = mime_type or mimetypes.guess_type(path.name)[0] or "video/mp4"
+        self._upload_paths[digest] = path
         registry_path = self.cache_dir / "uploads.json"
         registry = json.loads(registry_path.read_text()) if registry_path.is_file() else {}
-        previous = registry.get(digest)
+        # Uploads belong to one key's project; the first key keeps the original (bare-hash) entries.
+        entry = digest if self.key_index == 0 else f"{self._fingerprint()}|{digest}"
+        previous = registry.get(entry)
         if previous and (previous.get("expires_epoch") or 0) > time.time() + 3600:
             try:
                 info = self.transport.get_file(previous["name"])
                 if info.get("state") == "ACTIVE":
                     self.ledger.note(kind="upload_reused", file=path.name, name=previous["name"])
-                    return UploadedFile(previous["name"], previous["uri"], previous["mime_type"], digest)
+                    return UploadedFile(previous["name"], previous["uri"], previous["mime_type"], digest,
+                                        self._fingerprint())
             except Exception as exc:  # noqa: BLE001 - expired/deleted: upload again
                 self.ledger.note(kind="upload_reuse_failed", reason=self._classify(exc)[1][:200])
         started = time.time()
@@ -438,13 +510,13 @@ class GeminiClient:
             info = self.transport.get_file(info["name"])
         if info.get("state") not in ("ACTIVE", "", None):
             raise GeminiError(f"Gemini could not process {path.name}: state {info.get('state')}.")
-        registry[digest] = {"name": info["name"], "uri": info["uri"], "mime_type": info.get("mime_type") or mime_type,
+        registry[entry] = {"name": info["name"], "uri": info["uri"], "mime_type": info.get("mime_type") or mime_type,
                             "expires_epoch": info.get("expires_epoch") or time.time() + 47 * 3600,
                             "uploaded_epoch": time.time()}
         _write_json(registry_path, registry)
         self.ledger.note(kind="upload", file=path.name, bytes=path.stat().st_size,
                          seconds=round(time.time() - started, 2))
-        return UploadedFile(info["name"], info["uri"], registry[digest]["mime_type"], digest)
+        return UploadedFile(info["name"], info["uri"], registry[entry]["mime_type"], digest, self._fingerprint())
 
     # ---- explicit context cache
     def context_cache(self, model: str, parts: list[dict], system: str, min_tokens: int = 4096) -> str | None:
@@ -469,7 +541,7 @@ class GeminiClient:
     @staticmethod
     def _stable(parts: list[dict]) -> list[dict]:
         # Identify uploaded media by content hash, not by expiring file URIs.
-        return [{k: v for k, v in p.items() if k not in ("file_uri",)} for p in parts]
+        return [{k: v for k, v in p.items() if k not in ("file_uri", "file_key")} for p in parts]
 
     # ---- generation
     def generate(self, stage: str, schema: type[BaseModel], parts: list[dict], *, system: str,
@@ -486,7 +558,11 @@ class GeminiClient:
         while True:
             current = self.settings.resolved_models.get(base) or self.settings.model_preferences[base][0]
             if current in self._exhausted_today():
-                current = self._switch(base, current, f"{current} already used up its daily quota today")
+                other = self._key_with_quota(current)
+                if other is not None:
+                    self._use_key(other, f"{current} already used up its daily quota today on key {self.key_index + 1}")
+                else:
+                    current = self._switch(base, current, f"{current} already used up its daily quota today")
             # With no other model to move to, an overload is waited out with the full retry budget.
             patient = not self._fallbacks(base, current)
             try:
@@ -494,12 +570,16 @@ class GeminiClient:
             except (GeminiModelUnavailable, GeminiQuotaExhausted, GeminiTimeout) as exc:
                 if isinstance(exc, GeminiQuotaExhausted):
                     self._mark_exhausted(current)
+                    other = self._key_with_quota(current)
+                    if other is not None:
+                        self._use_key(other, str(exc))
+                        continue  # Same model, next key's quota.
                 self._switch(base, current, str(exc), exc)
 
     def _fallbacks(self, base: str, current: str) -> list[str]:
         candidates = list(self.settings.model_preferences[base])
         later = candidates[candidates.index(current) + 1:] if current in candidates else []
-        exhausted = self._exhausted_today()
+        exhausted = set.intersection(*(self._exhausted_today(i) for i in range(self.key_count)))
         return [m for m in later if (self.available_models is None or m in self.available_models)
                 and m not in exhausted]
 
@@ -527,13 +607,23 @@ class GeminiClient:
         from zoneinfo import ZoneInfo
         return datetime.now(ZoneInfo("America/Los_Angeles")).date().isoformat()  # Quotas reset at Pacific midnight.
 
-    def _exhausted_today(self) -> set[str]:
+    def _exhausted_today(self, index: int | None = None) -> set[str]:
+        """Models whose daily quota is used up today for one key (the current key by default)."""
         path = self.cache_dir / "exhausted-models.json"
         try:
             data = json.loads(path.read_text())
         except (OSError, ValueError):
             return set()
-        return {m for m, day in data.items() if day == self._quota_day()}
+        index = self.key_index if index is None else index
+        mine = self._fingerprint(index)
+        result = set()
+        for name, day in data.items():
+            if day != self._quota_day():
+                continue
+            owner, _, model = name.rpartition("|")
+            if owner == mine or (not owner and index == 0):  # Bare entries predate multiple keys: key 1.
+                result.add(model)
+        return result
 
     def _mark_exhausted(self, model: str) -> None:
         path = self.cache_dir / "exhausted-models.json"
@@ -541,7 +631,7 @@ class GeminiClient:
             data = json.loads(path.read_text())
         except (OSError, ValueError):
             data = {}
-        data[model] = self._quota_day()
+        data[model if self.key_index == 0 else f"{self._fingerprint()}|{model}"] = self._quota_day()
         _write_json(path, data)
 
     def _pace(self) -> None:
@@ -600,7 +690,7 @@ class GeminiClient:
         while True:
             attempt += 1
             self.ledger.reserve(stage, model, estimate, max_output_tokens)
-            request_parts = call_parts + ([text_part(feedback)] if feedback else [])
+            request_parts = self._for_current_key(call_parts) + ([text_part(feedback)] if feedback else [])
             self._pace()
             try:
                 result = self.transport.generate(model, request_parts, system=system, schema=schema,
