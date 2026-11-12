@@ -56,6 +56,22 @@ class GeminiOverloaded(GeminiModelUnavailable):
     """The model kept answering 5xx (e.g. 503 high demand) through every retry."""
 
 
+class GeminiDegenerateOutput(GeminiModelUnavailable):
+    """The model fell into a repeating loop until the output limit (run 11: '1234567890...')."""
+
+
+def _looping(text: str, window: int = 600) -> bool:
+    """True when the response ends in one short pattern repeated across `window` characters."""
+    tail = text[-window:]
+    if len(tail) < window:
+        return False
+    for period in range(1, 201):
+        unit = tail[-period:]
+        if (unit * (window // period + 1))[-window:] == tail:
+            return True
+    return False
+
+
 class GeminiTimeout(GeminiError):
     pass
 
@@ -498,7 +514,7 @@ class GeminiClient:
                     f"Every {base} model candidate ({', '.join(candidates)}) has used up its daily free-tier "
                     "quota. Completed stages are cached: rerun after the quota resets (midnight Pacific time) "
                     "to resume.") from exc
-            error = type(exc) if isinstance(exc, (GeminiOverloaded, GeminiTimeout)) else GeminiModelUnavailable
+            error = type(exc) if isinstance(exc, (GeminiOverloaded, GeminiTimeout, GeminiDegenerateOutput)) else GeminiModelUnavailable
             raise error(f"{reason} No further {base} model candidates remain "
                         f"({', '.join(candidates)}). Completed stages are cached; rerun later to resume.") from exc
         self.settings.resolved_models[base] = usable[0]
@@ -628,6 +644,20 @@ class GeminiClient:
                 if result.get("finish_reason") in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "RECITATION"):
                     raise GeminiOutputError(f"Gemini blocked the {stage} response ({result['finish_reason']}).")
                 if result.get("finish_reason") == "MAX_TOKENS":
+                    if _looping(text):
+                        # More room only buys a longer loop: re-ask once with a nudge, then move on.
+                        if repairs >= self.settings.max_output_repairs:
+                            diagnostic = self.cache_dir / "diagnostics" / f"{stage.replace(':', '-')}-{identity[:12]}.json"
+                            _write_json(diagnostic, {"stage": stage, "model": model, "raw": text[:20000],
+                                                     "error": "repeating loop until the output limit"})
+                            raise GeminiDegenerateOutput(f"{model} looped until the output limit during {stage} "
+                                                         f"(raw output: {diagnostic}).")
+                        repairs += 1
+                        temperature = min(1.0, temperature + 0.4)
+                        reasons.append("degenerate: response looped until the output limit")
+                        feedback = ("Your previous response fell into a repeating loop and never finished. Write the "
+                                    "complete JSON once, with no repeated characters or filler, and stop.")
+                        continue
                     if max_output_tokens < MAX_OUTPUT_CEILING:
                         # Thinking tokens count toward the limit: give the answer room instead of re-asking.
                         max_output_tokens = min(MAX_OUTPUT_CEILING, max_output_tokens * 2)

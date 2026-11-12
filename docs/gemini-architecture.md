@@ -97,6 +97,7 @@ Stage E does the same for matching: it shows only the candidate clips for each s
 - **Pacing and caps:** requests are paced to `requests_per_minute` (default 8). Each run is capped at `max_requests` (default 150), and the preflight compares that cap with its request estimate.
 - **Retries:** 429s wait for the server's suggested retry delay. A daily-quota 429 stops immediately with resume instructions.
 - **Overload:** a 503 or 504 is retried at most `overload_attempts` (3) times on one model, then the next candidate takes over. The last remaining candidate gets the full `max_retries` budget.
+- **Looping output:** a response that repeats one short pattern up to the output limit is re-asked once with a nudge and a higher temperature, without raising the limit. If it loops again, the next candidate model takes over. The planning voice rate is updated only when a run measures more than 5% off, so the word budget and the cached script stay stable between runs.
 - **Lighter workload:** explicit context caching is off (it needs billing). The run uses at most 6 zoom checks and 1 review pass, and no Gemini review of the rendered file.
 - **Budget:** the dollar budget is not enforced because nothing is billed. The cost report shows the paid-price equivalent.
 
