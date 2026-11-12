@@ -453,9 +453,8 @@ def test_picture_script_validation_enforces_clip_order_capacity_and_key_word():
     bad = [([{"clip_ids": ["K001", "K003"], "text": "He lifts the rifle.", "key_word": "rifle"}], "not consecutive"),
            ([{"clip_ids": ["K002"], "text": "Then he aims carefully.", "key_word": "aims"},
              {"clip_ids": ["K001"], "text": "He lifts the rifle.", "key_word": "rifle"}], "goes back"),
-           ([{"clip_ids": ["K001"], "text": "He lifts the heavy rifle from the old wooden crate in the dark barn.",
+           ([{"clip_ids": ["K001"], "text": "He slowly lifts the heavy rusted rifle out of the old wooden crate in the dark and silent barn.",
               "key_word": "rifle"}], "fit"),
-           ([{"clip_ids": ["K001"], "text": "He lifts the rifle.", "key_word": "truck"}], "key_word"),
            ([{"clip_ids": ["K009"], "text": "He lifts the rifle.", "key_word": "rifle"}], "known clip")]
     for lines_, message in bad:
         with pytest.raises(ValueError, match=message):
@@ -488,7 +487,6 @@ def test_merge_keeps_action_clips_and_limits_context():
              ((action1, dict(context, basis="story_notes"), action2), "no"),
              ((action1, dict(context, event_ids=["EV0001"]), action2), "inferred_context without"),
              ((action1,), "backbone"),
-             ((action1, dict(action2, text="He waits by the window."), ), "key word"),
              ((dict(action1, text="He lifts the rifle."), dict(action2, text="Then he aims."),
                dict(context, text="The old truck waits outside the barn tonight.")), "action-led")]
     for lines, message in cases:
@@ -562,3 +560,12 @@ def test_factual_slips_from_the_reviewer_are_escalated_to_actionable(tmp_path):
                               story_map={"events": []}, editorial={"selected": []}, log=lambda *_: None)
     severities = {i["check"]: i["severity"] for i in issues}
     assert severities == {"unsupported_statement": "major", "pacing": "minor"}
+
+
+def test_a_missing_key_word_disables_alignment_instead_of_rejecting_the_script():
+    """Run 43162288647: one line naming 'dog' without saying it discarded the whole footage-first script."""
+    from shorts_pipeline.gemini.picture import validate_picture
+    from shorts_pipeline.gemini.schemas import PictureScript
+    script = PictureScript(lines=[{"clip_ids": ["K001"], "text": "He lifts the rifle from the crate.", "key_word": "dog"}])
+    lines = validate_picture(script, CLIPS, rate=2.5, budget_high=10)
+    assert lines[0]["key_word"] == "" and lines[0]["clip_ids"] == ["K001"]

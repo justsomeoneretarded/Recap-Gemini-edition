@@ -229,6 +229,7 @@ def _timing_loop(run: Run, beats: list[dict]) -> list[dict]:
     """Synthesize, then fix duration overflow and sentence footage shortfalls (bounded)."""
     widened: set[str] = set()
     rewritten: set[str] = set()
+    event_extended: set[str] = set()
     for attempt in range(run.settings.max_timing_repairs + 1):
         beats = run.synthesize(beats)
         total = sum(b["duration"] for b in beats)
@@ -265,13 +266,36 @@ def _timing_loop(run: Run, beats: list[dict]) -> list[dict]:
             run.record(stage="G", action="widen_footage_search", sentence_ids=sorted(wide), outcome="rematched")
             beats, evidence, shortfalls = run.place(beats)
             changed = True
+        # Cheaper and story-preserving: give short sentences their own verified event footage first.
+        sentences = {s["sentence_id"]: s for b in beats for s in b.get("sentences", [])}
+        added_footage = False
+        for short in shortfalls:
+            sid = short["sentence_id"]
+            if sid in event_extended or sid not in sentences:
+                continue
+            match = run.matches.get(sid, {"sentence_id": sid, "verdict": "unsupported", "shots": []})
+            known = {(sh["start"], sh["end"]) for sh in match.get("shots", [])}
+            extra = [sh for sh in _event_footage(run, sentences[sid]) if (sh["start"], sh["end"]) not in known]
+            event_extended.add(sid)
+            if extra:
+                run.matches[sid] = {**match, "shots": list(match.get("shots", [])) + extra}
+                run.record(stage="G", action="event_footage_fallback", sentence_id=sid, needed=short["needed"],
+                           had=short["available"], added=[sh["shot_id"] for sh in extra], outcome="extended")
+                added_footage = True
+        if added_footage:
+            beats, evidence, shortfalls = run.place(beats)
+            changed = True
         for beat_id in sorted({s["beat_id"] for s in shortfalls} - rewritten):
             beat = next(b for b in beats if b["id"] == beat_id)
             mine = [s for s in shortfalls if s["beat_id"] == beat_id]
             spoken = beat.get("duration") or 0.1
             available = sum(e["footage_seconds"] for e in evidence if e["beat_id"] == beat_id)
             words = count_words(beat["text"])
-            limit = max(4, math.floor(words * min(1.0, available / max(spoken, 0.1)) * 0.92))
+            limit = math.floor(words * min(1.0, available / max(spoken, 0.1)) * 0.92)
+            # Never gut a beat: below this, final placement removes the unsupported sentence instead.
+            limit = max(limit, math.ceil(words * 0.6), 4 * len(beat.get("sentences", [])))
+            if limit >= words:
+                continue
             try:
                 beats = run.rewrite(beats, beat_id, "there is not enough verified footage to cover this narration "
                                     f"({', '.join(s['sentence_id'] for s in mine)}); say less", max_words=limit)
@@ -451,6 +475,11 @@ def run_gemini_pipeline(request: dict, source: Path, source_duration: float, wor
     # H + I — independent review and bounded targeted corrections
     beats, issues, summaries = correction_loop(run, beats)
     beats, evidence, shortfalls = _finalize_placement(run, beats)
+    # Findings about beats or sentences that no longer exist (removed or rewritten) are stale.
+    live_beats = {b["id"] for b in beats}
+    live_sentences = {s["sentence_id"] for b in beats for s in b.get("sentences", [])}
+    issues = [i for i in issues if (not i.get("beat_id") or i["beat_id"] in live_beats)
+              and (not i.get("sentence_id") or i["sentence_id"] in live_sentences)]
     ducking = duck_source_dialogue(beats, run.segments)
     unresolved = [i for i in issues if i["severity"] == "critical"]
     review_status = "needs_human_review" if unresolved else (
