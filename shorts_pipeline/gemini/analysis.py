@@ -23,7 +23,7 @@ from pathlib import Path
 from .client import GeminiClient, text_part, video_part
 from .schemas import VerificationResult, WindowAnalysis
 
-ANALYSIS_VERSION = 1
+ANALYSIS_VERSION = 2  # 2: reports burned-in captions / voice-over (source_flags)
 PROXY_VERSION = 1
 
 ANALYSIS_SYSTEM = (
@@ -136,7 +136,9 @@ def _window_prompt(window: dict, scenes: list[dict], segments: list[dict], notes
         "(focus_x, 0=left edge, 1=right edge) of the key subject. Use dialogue_heard only for words you clearly "
         "hear; leave it empty otherwise. Give a character name only if it is shown on screen, clearly spoken in "
         "the clip, or present in the story notes; set name_basis accordingly, otherwise name='' and name_basis='none'. "
-        "Use uncertainty to explain anything ambiguous (fast motion, occlusion, darkness).\n\n"
+        "Use uncertainty to explain anything ambiguous (fast motion, occlusion, darkness). Also report whether "
+        "added captions/subtitles are burned into the picture (not on-screen signs or titles that belong to the film) "
+        "and whether a voice-over narrator, rather than a character, talks over the footage.\n\n"
         + json.dumps({"detected_shots": shots, "whisper_asr_estimates": asr,
                       "story_notes_untrusted": notes}, ensure_ascii=False)
     )
@@ -245,6 +247,8 @@ def analyze_footage(client: GeminiClient, source: Path, workdir: Path, scenes: l
         events += kept
         rejected += [{**d, "window": window["index"]} for d in dropped]
         window_reports.append({**window, "summary": result.window_summary, "reported": len(raw),
+                               "burned_in_captions": result.burned_in_captions,
+                               "voice_over_narration": result.voice_over_narration,
                                "kept": len(kept), "rejected": len(dropped), "relative_timestamps_shifted": shifted})
     events.sort(key=lambda e: (e["start"], e["end"]))
     for number, event in enumerate(events, 1):
@@ -256,7 +260,10 @@ def analyze_footage(client: GeminiClient, source: Path, workdir: Path, scenes: l
     for event in kept:
         event["shot_ids"] = _shots_for(scenes, event["start"], event["end"]) or event["shot_ids"]
     rejected += [e for e in events if e["status"] == "rejected"]
+    source_flags = {"burned_in_captions": any(w["burned_in_captions"] for w in window_reports),
+                    "voice_over_narration": any(w["voice_over_narration"] for w in window_reports)}
     return {"version": ANALYSIS_VERSION, "proxy": proxy_meta, "uploaded_file": file.name,
+            "source_flags": source_flags,
             "analysis_settings": settings, "windows": window_reports, "events": kept,
             "rejected_events": rejected, "zoom_checks": zoom,
             "coverage": (f"Native Gemini video understanding of every source second in {len(windows)} window(s) "

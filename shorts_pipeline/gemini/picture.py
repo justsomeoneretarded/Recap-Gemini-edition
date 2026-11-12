@@ -133,12 +133,71 @@ def plan_clips(client: GeminiClient, file, editorial: dict, inventory: dict, sce
                     break
         for clip in accepted:
             clips.append({**clip, "event_id": event["id"]})
+    clips = cover_events(clips, items, notes)
     for number, clip in enumerate(clips, 1):
         clip["clip_id"] = f"K{number:03d}"
         clip["seconds"] = round(clip["end"] - clip["start"], 3)
     if not clips:
         raise ValueError("No usable clips could be cut from the selected events.")
     return {"clips": clips, "notes": notes}
+
+
+EVENT_PAD_SECONDS = 0.3
+MIN_REMAINDER_SECONDS = 1.0
+
+
+def cover_events(clips: list[dict], items: list[tuple[dict, list[dict]]], notes: list[str]) -> list[dict]:
+    """Use all the verified footage of each selected event, not just the model's tight cut.
+
+    Each clip grows toward its event's verified range inside its own shot (never
+    across a neighbouring clip), and any remaining stretch of the event's shots
+    that no clip covers becomes its own clip. Nothing outside the event is added.
+    """
+    events = {event["id"]: (event, cands) for event, cands in items}
+
+    def free(a: float, b: float, me: dict | None) -> tuple[float, float]:
+        for other in clips:
+            if other is me:
+                continue
+            if other["end"] <= a or other["start"] >= b:
+                continue
+            if me is not None and other["start"] >= me["end"]:
+                b = min(b, other["start"])
+            elif me is not None and other["end"] <= me["start"]:
+                a = max(a, other["end"])
+            else:
+                return a, a
+        return a, b
+
+    grown = 0.0
+    for clip in clips:
+        event = events[clip["event_id"]][0]
+        lo, hi = clip["shot_bounds"]
+        a, b = free(max(lo, event["start"] - EVENT_PAD_SECONDS), min(hi, event["end"] + EVENT_PAD_SECONDS), clip)
+        a, b = min(a, clip["start"]), max(b, clip["end"])
+        grown += (clip["start"] - a) + (b - clip["end"])
+        clip["start"], clip["end"] = round(a, 3), round(b, 3)
+    added = []
+    for event, cands in items:
+        for cand in cands:
+            a, b = max(cand["start"], event["start"]), min(cand["end"], event["end"])
+            covered = sorted((c["start"], c["end"]) for c in clips + added if c["end"] > a and c["start"] < b)
+            cursor = a
+            for ca, cb in covered + [(b, b)]:
+                if ca - cursor >= MIN_REMAINDER_SECONDS:
+                    gap_a, gap_b = free(cursor, ca, None)
+                    if gap_b - gap_a >= MIN_REMAINDER_SECONDS:
+                        added.append({"shot_id": cand["shot_id"], "start": round(gap_a, 3), "end": round(gap_b, 3),
+                                      "anchor": round(min(max(event.get("peak", (gap_a + gap_b) / 2), gap_a), gap_b), 3),
+                                      "focus_x": event.get("focus_x", 0.5), "shows": event["visible_action"],
+                                      "role": "action", "quality": 0.55, "shot_bounds": [cand["start"], cand["end"]],
+                                      "event_id": event["id"], "covers_event_remainder": True})
+                cursor = max(cursor, cb)
+    if grown or added:
+        notes.append(f"extended clips by {grown:.1f}s and added {len(added)} clip(s) covering the rest of their "
+                     "verified events")
+    order = {event["id"]: i for i, (event, _) in enumerate(items)}
+    return sorted(clips + added, key=lambda c: (order[c["event_id"]], c["start"]))
 
 
 def _capacity(clip_ids: list[str], clips: dict, rate: float) -> int:

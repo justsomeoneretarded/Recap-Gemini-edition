@@ -77,8 +77,9 @@ def verify_render(final: Path, timeline: dict, outdir: Path, *, width: int, heig
         fail("duration", "critical", f"rendered {duration:.2f}s but the measured timeline is {planned:.2f}s")
     if duration > min(180.0, target) + 0.25:
         fail("duration", "critical", f"rendered {duration:.2f}s exceeds the {target:.0f}s maximum")
-    if frames and abs(frames - duration * fps) > 2:
-        fail("frame_count", "major", f"{frames} frames for {duration:.3f}s at {fps} fps")
+    video_seconds = float(video.get("duration") or duration)
+    if frames and abs(frames - video_seconds * fps) > 2:
+        fail("frame_count", "major", f"{frames} frames for {video_seconds:.3f}s of video at {fps} fps")
     if audio is None:
         fail("audio", "critical", "no audio stream")
     else:

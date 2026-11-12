@@ -25,7 +25,7 @@ PRESETS = {
     # Flash-Lite as fallbacks; calls are paced and capped per run.
     "free": {
         "models": {stage: FLASH + LITE for stage in ("analysis", "planning", "writing", "matching", "review")},
-        "analysis_quality": "standard", "review_passes": 1, "max_budget_usd": 50.0,
+        "analysis_quality": "standard", "review_passes": 2, "max_budget_usd": 50.0,
         "render_review": False, "explicit_cache": False, "free_tier": True,
         "requests_per_minute": 8, "max_requests": 150, "zoom_cap": 6,
     },
