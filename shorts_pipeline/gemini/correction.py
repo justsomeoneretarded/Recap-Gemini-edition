@@ -15,10 +15,37 @@ import math
 from .script import count_words
 
 ACTIONABLE = ("critical", "major")
+MIN_KEEP = 0.8  # A review-driven rewrite keeps at least this share of the beat's words.
 
 
 def _issue_key(issue: dict) -> tuple:
     return (issue["check"], issue.get("beat_id", ""), issue.get("sentence_id", ""))
+
+
+def _cover_beat(run, beats: list[dict], beat: dict) -> tuple[list[dict], str | None, str]:
+    """A beat with too little footage first gets its own verified event shots; it is shortened
+    only if those are already in use, and then by at most a quarter."""
+    from .pipeline import _event_footage
+
+    added = []
+    for sentence in beat["sentences"]:
+        sid = sentence["sentence_id"]
+        match = run.matches.get(sid, {"sentence_id": sid, "verdict": "unsupported", "shots": []})
+        known = {(sh["start"], sh["end"]) for sh in match.get("shots", [])}
+        extra = [sh for sh in _event_footage(run, sentence) if (sh["start"], sh["end"]) not in known]
+        if extra:
+            run.matches[sid] = {**match, "shots": list(match.get("shots", [])) + extra}
+            added += [sh["shot_id"] for sh in extra]
+    if added:
+        return beats, beat["id"], f"added verified event footage to {beat['id']}: {', '.join(added)}"
+    words = count_words(beat["text"])
+    limit = max(4, math.ceil(words * 0.75))
+    if limit >= words:
+        return beats, None, f"{beat['id']} has no more verified footage and is too short to cut; left for final placement"
+    beats = run.rewrite(beats, beat["id"], "there is not enough verified footage to cover this narration; say a "
+                        "little less while keeping its key action", max_words=limit,
+                        min_words=max(4, math.ceil(words * 0.6)))
+    return beats, beat["id"], f"shortened {beat['id']} to {limit} words: no more verified footage"
 
 
 def _fix(run, beats: list[dict], issue: dict) -> tuple[list[dict], str | None, str]:
@@ -40,6 +67,8 @@ def _fix(run, beats: list[dict], issue: dict) -> tuple[list[dict], str | None, s
         return [b for b in beats if b["id"] != beat_id], beat_id, f"removed dialogue clip {beat_id}: {issue['description'][:120]}"
     if beat is None or beat["kind"] != "narration":
         return beats, None, "issue does not point to a narration beat; left for human review"
+    if issue["check"] == "narration_footage_fit" and fix == "retime" and not sid:
+        return _cover_beat(run, beats, beat)
     if fix in ("rematch_shot", "adjust_boundaries", "retime") and sid:
         current = [s["shot_id"] for s in beat.get("shots", []) if s.get("sentence_id") == sid]
         if fix == "adjust_boundaries" and len(run.matches.get(sid, {}).get("shots", [])) > 1:
@@ -57,7 +86,9 @@ def _fix(run, beats: list[dict], issue: dict) -> tuple[list[dict], str | None, s
         if fix == "revise_opening":
             reason = (f"strengthen the opening using the hook event {run.editorial.get('hook_event_id')}: " + reason)
         words = count_words(beat["text"])
-        beats = run.rewrite(beats, beat_id, reason, max_words=words + 6)
+        # A targeted fix changes what the beat says, not how much: it must not gut the story.
+        beats = run.rewrite(beats, beat_id, reason + "; keep the beat about as long as it is now",
+                            max_words=words + 6, min_words=max(4, math.ceil(words * (0.6 if fix == "remove_claim" else MIN_KEEP))))
         return beats, beat_id, f"rewrote {beat_id}"
     return beats, None, f"no automatic fix for {fix}; left for human review"
 

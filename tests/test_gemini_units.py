@@ -97,6 +97,8 @@ def test_rate_limits_and_timeouts_retry_then_succeed_or_fail_clearly(tmp_path):
     call = [c for c in client.ledger.calls if not c.get("error")][-1]
     assert len(call["retry_reasons"]) == 2 and call["retry_reasons"][0].startswith("rate_limit")
     client = make_client(tmp_path / "b", Scripted([FakeAPIError("timeout", "deadline")] * 5))
+    only = client.settings.model_preferences["review"][-1]
+    client.settings.model_preferences["review"] = [only]  # No other model: the full retry budget is used.
     with pytest.raises(GeminiTimeout, match="after 5 attempt"):
         client.generate("review", QualityReview, [text_part("x")], system="s")
     client = make_client(tmp_path / "c", Scripted([FakeAPIError("rate_limit", "429")] * 5))
@@ -569,3 +571,49 @@ def test_a_missing_key_word_disables_alignment_instead_of_rejecting_the_script()
     script = PictureScript(lines=[{"clip_ids": ["K001"], "text": "He lifts the rifle from the crate.", "key_word": "dog"}])
     lines = validate_picture(script, CLIPS, rate=2.5, budget_high=10)
     assert lines[0]["key_word"] == "" and lines[0]["clip_ids"] == ["K001"]
+
+
+def test_overloaded_model_is_abandoned_after_three_tries_for_the_next_candidate(tmp_path):
+    # Run 9: 503s were retried 7 times per model and one call took 31 minutes.
+    transport = Scripted([FakeAPIError("server", "503 UNAVAILABLE")] * 3 + [REVIEW])
+    client = make_client(tmp_path, transport)
+    first, second = client.settings.model_preferences["review"][:2]
+    client.settings.model_preferences["review"] = [first, second]
+    assert client.generate("review", QualityReview, [text_part("x")], system="s").verdict == "pass"
+    assert transport.calls == 4 and client.settings.resolved_models["review"] == second
+    assert any(n.get("kind") == "model_substitution" for n in client.ledger.events)
+
+
+def test_footage_fit_fix_adds_event_footage_instead_of_rewriting(tmp_path):
+    # Run 9: every beat flagged "Only Xs of footage" was rewritten, cutting 259 words to 159.
+    from shorts_pipeline.gemini.correction import _fix
+
+    class StubRun:
+        def __init__(self):
+            self.inventory = {"events": [{"id": "EV1", "start": 10.0, "end": 16.0, "peak": 12.0,
+                                          "visible_action": "he runs"}]}
+            self.scenes = [{"id": "S1", "start": 9.0, "end": 12.0}, {"id": "S2", "start": 12.0, "end": 15.0}]
+            self.matches = {"N01.1": {"sentence_id": "N01.1", "verdict": "supported",
+                                      "shots": [{"shot_id": "S1", "start": 9.0, "end": 12.0}]}}
+            self.rewrites = []
+
+        def rewrite(self, beats, beat_id, reason, **limits):
+            self.rewrites.append(limits)
+            return beats
+
+    run = StubRun()
+    beat = {"id": "N01", "kind": "narration", "text": "He runs through the rain to the hotel door now",
+            "sentences": [{"sentence_id": "N01.1", "text": "He runs.", "event_ids": ["EV1"]}]}
+    issue = {"check": "narration_footage_fit", "severity": "critical", "fix": "retime", "beat_id": "N01",
+             "sentence_id": "", "description": "Only 3.0s of selected footage for 5.0s narration"}
+    _, changed, action = _fix(run, [beat], issue)
+    assert changed == "N01" and "S2" in action and not run.rewrites
+    assert [s["shot_id"] for s in run.matches["N01.1"]["shots"]] == ["S1", "S2"]
+    # With no further verified footage, it shortens by at most a quarter.
+    _, changed, action = _fix(run, [beat], issue)
+    assert run.rewrites == [{"max_words": 8, "min_words": 6}]
+    # A content fix keeps the beat's length.
+    run.rewrites.clear()
+    _fix(run, [beat], {**issue, "check": "unsupported_identity_or_dialogue", "fix": "rewrite_beat",
+                       "sentence_id": "N01.1"})
+    assert run.rewrites == [{"max_words": 16, "min_words": 8}]
