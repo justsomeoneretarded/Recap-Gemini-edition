@@ -401,6 +401,8 @@ class GeminiClient:
         self.transport = self._slot_transport(0)
         self._upload_paths: dict[str, Path] = {}
         self._remapped: dict[tuple, UploadedFile] = {}
+        self._dead_models: set[str] = set()  # Answered 'not found' / no free quota: skipped for the run.
+        self._overload_waited, self._overload_cycles = 0.0, 0
         self._context_caches: dict[str, str] = {}
         self.available_models: set[str] | None = None
         self.requests_sent = 0
@@ -568,6 +570,8 @@ class GeminiClient:
             try:
                 return self._generate(stage, schema, parts, system=system, model=current, patient=patient, **kwargs)
             except (GeminiModelUnavailable, GeminiQuotaExhausted, GeminiTimeout) as exc:
+                if type(exc) in (GeminiModelUnavailable, GeminiNoFreeQuota):
+                    self._dead_models.add(current)  # Not a passing state: never come back to it this run.
                 if isinstance(exc, GeminiQuotaExhausted):
                     self._mark_exhausted(current)
                     other = self._key_with_quota(current)
@@ -581,13 +585,30 @@ class GeminiClient:
         later = candidates[candidates.index(current) + 1:] if current in candidates else []
         exhausted = set.intersection(*(self._exhausted_today(i) for i in range(self.key_count)))
         return [m for m in later if (self.available_models is None or m in self.available_models)
-                and m not in exhausted]
+                and m not in exhausted and m not in self._dead_models]
 
     def _switch(self, base: str, current: str, reason: str, exc: Exception | None = None) -> str:
         """Move a stage to its next usable model candidate (quotas are per model)."""
         candidates = list(self.settings.model_preferences[base])
         exhausted = self._exhausted_today()
         usable = self._fallbacks(base, current)
+        if not usable and isinstance(exc, (GeminiOverloaded, GeminiTimeout)):
+            # Overload is temporary (run 13 walked all nine candidates in 503s and gave up):
+            # wait, then start again from the best model that is still usable.
+            alive = [m for m in candidates if (self.available_models is None or m in self.available_models)
+                     and m not in self._dead_models
+                     and m not in set.intersection(*(self._exhausted_today(i) for i in range(self.key_count)))]
+            budget = self.settings.overload_wait_seconds
+            if alive and self._overload_waited < budget:
+                wait = min(120.0, 30.0 * 2 ** self._overload_cycles, budget - self._overload_waited)
+                self._overload_cycles += 1
+                self._overload_waited += wait
+                self.ledger.note(kind="overload_cycle", stage=base, waited_seconds=round(wait, 1),
+                                 total_waited_seconds=round(self._overload_waited, 1), restart_with=alive[0],
+                                 reason=reason[:200])
+                self.sleep(wait)
+                self.settings.resolved_models[base] = alive[0]
+                return alive[0]
         if not usable:
             if isinstance(exc, GeminiQuotaExhausted) or current in exhausted:
                 raise GeminiQuotaExhausted(
