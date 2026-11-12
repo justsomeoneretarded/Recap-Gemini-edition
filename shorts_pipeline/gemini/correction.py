@@ -34,6 +34,10 @@ def _fix(run, beats: list[dict], issue: dict) -> tuple[list[dict], str | None, s
         beats = run.rewrite(beats, longest["id"], issue["description"] + "; shorten this beat",
                             max_words=max(4, math.floor(words * 0.8)))
         return beats, longest["id"], f"shortened {longest['id']} to fit the duration"
+    if beat is not None and beat["kind"] == "dialogue" and issue["check"] in (
+            "dialogue_clip_inaccurate", "unsupported_identity_or_dialogue", "incoherent_story", "other"):
+        # A retained source clip that is not clean, relevant film dialogue is simply dropped.
+        return [b for b in beats if b["id"] != beat_id], beat_id, f"removed dialogue clip {beat_id}: {issue['description'][:120]}"
     if beat is None or beat["kind"] != "narration":
         return beats, None, "issue does not point to a narration beat; left for human review"
     if fix in ("rematch_shot", "adjust_boundaries", "retime") and sid:

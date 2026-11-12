@@ -531,3 +531,34 @@ def test_cached_answer_from_another_stage_candidate_is_reused_after_a_switch(tmp
     assert later.settings.resolved_models["review"] == "gemini-2.5-flash"
     assert later.generate("review", QualityReview, [text_part("same request")], system="s").verdict == "pass"
     assert later.transport.calls == 0 and later.ledger.calls[-1]["response_cache_hit"]
+
+
+def test_clips_cover_their_whole_verified_event_without_overlap():
+    from shorts_pipeline.gemini.picture import cover_events
+    event = {"id": "E1", "start": 10.0, "end": 26.0, "visible_action": "fight", "peak": 15}
+    cands = [{"shot_id": "S1", "start": 8.0, "end": 14.0}, {"shot_id": "S2", "start": 14.0, "end": 22.0},
+             {"shot_id": "S3", "start": 22.0, "end": 30.0}]
+    clips = [{"shot_id": "S1", "start": 11.0, "end": 12.0, "shot_bounds": [8, 14], "event_id": "E1", "anchor": 11.5},
+             {"shot_id": "S2", "start": 16.0, "end": 17.0, "shot_bounds": [14, 22], "event_id": "E1", "anchor": 16.5}]
+    notes = []
+    out = cover_events(clips, [(event, cands)], notes)
+    spans = [(c["start"], c["end"]) for c in out]
+    assert spans == [(9.7, 14.0), (14.0, 22.0), (22.0, 26.0)]  # Whole event, padded, no overlaps.
+    assert out[-1]["covers_event_remainder"] and "extended clips" in notes[0]
+    assert all(c["start"] >= c["shot_bounds"][0] and c["end"] <= c["shot_bounds"][1] for c in out)
+
+
+def test_factual_slips_from_the_reviewer_are_escalated_to_actionable(tmp_path):
+    from shorts_pipeline.gemini.review import gemini_review
+    review = {"verdict": "revise", "issues": [
+        {"check": "unsupported_statement", "severity": "minor", "beat_id": "N01", "sentence_id": "N01.1",
+         "description": "calls the gold coins markers", "fix": "rewrite_beat"},
+        {"check": "pacing", "severity": "minor", "description": "a little slow"}]}
+    client = make_client(tmp_path, Scripted([review]))
+    beats = [{"id": "N01", "kind": "narration", "text": "x", "sentences": [
+        {"sentence_id": "N01.1", "text": "He takes the markers.", "event_ids": ["EV0001"], "visual_requirement": ""}],
+        "shots": [{"start": 1, "end": 3, "sentence_id": "N01.1"}]}]
+    issues, _ = gemini_review(client, UploadedFile("f", "u", "video/mp4", "h"), beats, inventory=INVENTORY,
+                              story_map={"events": []}, editorial={"selected": []}, log=lambda *_: None)
+    severities = {i["check"]: i["severity"] for i in issues}
+    assert severities == {"unsupported_statement": "major", "pacing": "minor"}

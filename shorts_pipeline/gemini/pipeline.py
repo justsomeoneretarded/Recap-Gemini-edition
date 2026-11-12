@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from .analysis import analyze_footage
+from .analysis import ANALYSIS_VERSION, analyze_footage
 from .client import BudgetExceeded, CostLedger, GeminiClient, GeminiOutputError, _write_json
 from .matching import match_sentences, plan_shots
 from .picture import apply_key_times, build_hybrid
@@ -83,6 +83,11 @@ class Run:
         self.target = float(request["target_seconds"])
         self.fps = int(request.get("fps", 60))
         self.rate = planning_rate(request["narrator"], request["tts_model"])
+        self.rate_source = "measured 13-word validation clips"
+        calibrated = self._calibration().get(self._voice_key())
+        if calibrated:
+            # Plan with what this narrator actually spoke in earlier full runs (slightly conservative).
+            self.rate, self.rate_source = round(calibrated * 0.95, 3), "calibrated from earlier full narration"
         if synthesize is None:
             from ..voice import synthesize_plan
             synthesize = synthesize_plan
@@ -141,7 +146,29 @@ class Run:
             else:
                 self.ledger.note(kind="forced_alignment_unavailable", detail="torchaudio MMS_FA not importable")
         self.ledger.time_stage("G_narration_sync", time.time() - started)
+        self._record_rate(beats)
         return beats
+
+    # ---- measured voice speed
+    def _voice_key(self) -> str:
+        return f"{self.request['narrator']}|{self.request['tts_model']}"
+
+    def _calibration(self) -> dict:
+        try:
+            return json.loads((self.workdir / "gemini" / "cache" / "voice-rate.json").read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def _record_rate(self, beats: list[dict]) -> None:
+        narration = [b for b in beats if b["kind"] == "narration" and b.get("words") and b.get("duration")]
+        seconds = sum(b["duration"] for b in narration)
+        if seconds < 10:
+            return
+        measured = sum(len(b["words"]) for b in narration) / seconds
+        data = self._calibration()
+        data[self._voice_key()] = round(measured, 3)
+        _write_json(self.workdir / "gemini" / "cache" / "voice-rate.json", data)
+        self.measured_rate = measured
 
     def place(self, beats: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
         measured = measured_sentence_seconds(beats) if all(
@@ -166,6 +193,11 @@ class Run:
                            max_words=max_words, min_words=min_words, allowed_event_ids=allowed, context=neighbours)
         for key in ("audio_path", "duration", "words", "timing_provenance"):
             new.pop(key, None)
+        for position, sentence in enumerate(new["sentences"]):
+            # Keep each line's role (action vs context); the old key word may no longer be in the text.
+            old = beat["sentences"][position] if position < len(beat["sentences"]) else {}
+            sentence["line_kind"] = old.get("line_kind", "action")
+            sentence["key_word"] = ""
         beats = beats[:index] + [new] + beats[index + 1:]
         for sentence in beat["sentences"]:
             self.matches.pop(sentence["sentence_id"], None)
@@ -252,7 +284,48 @@ def _timing_loop(run: Run, beats: list[dict]) -> list[dict]:
             break
     if any(b["kind"] == "narration" and not b.get("words") for b in beats):
         beats = run.synthesize(beats)
-    beats, _, _ = run.place(beats)
+    beats, evidence, _ = run.place(beats)
+    return _expand_if_short(run, beats, evidence)
+
+
+def _expand_if_short(run: Run, beats: list[dict], evidence: list[dict]) -> list[dict]:
+    """If the measured Short is well under target while its placed footage has room, say more.
+
+    Each beat may grow only into footage already matched to its own sentences, at the
+    narrator's measured speed, so a longer Short never needs footage it does not have.
+    """
+    total = sum(b["duration"] for b in beats)
+    if total >= run.target * 0.85:
+        return beats
+    rate = getattr(run, "measured_rate", run.rate)
+    room = run.target * 0.95 - total
+    changed = False
+    spare_by_beat: dict[str, float] = {}
+    for entry in evidence:
+        spare_by_beat[entry["beat_id"]] = spare_by_beat.get(entry["beat_id"], 0.0) + max(
+            0.0, entry["footage_seconds"] - entry["estimated_seconds"] * 1.05)
+    for beat_id, spare in sorted(spare_by_beat.items(), key=lambda kv: -kv[1]):
+        if room <= 1.0 or spare < 1.5:
+            break
+        beat = next(b for b in beats if b["id"] == beat_id)
+        add_seconds = min(spare, room)
+        words = count_words(beat["text"])
+        extra = math.floor(add_seconds * rate * 0.9)
+        if extra < 4:
+            continue
+        try:
+            beats = run.rewrite(beats, beat_id, f"the Short is {total:.0f}s against a {run.target:.0f}s target and this "
+                                "beat's footage has unused time: add concrete, supported detail from its cited events "
+                                "(no new events, no padding)", min_words=words + extra // 2, max_words=words + extra)
+            room -= add_seconds
+            changed = True
+            run.record(stage="G", action="expand_underlength_beat", beat_id=beat_id, added_up_to_words=extra,
+                       measured_total=round(total, 2), outcome="rewritten")
+        except ValueError as exc:
+            run.record(stage="G", action="expand_underlength_beat", beat_id=beat_id, outcome="failed", error=str(exc)[:300])
+    if changed:
+        beats = run.synthesize(beats)
+        beats, _, _ = run.place(beats)
     return beats
 
 
@@ -287,12 +360,24 @@ def run_gemini_pipeline(request: dict, source: Path, source_duration: float, wor
 
     # A — footage understanding
     run.inventory = run.checkpoint(
-        "A-event-inventory", [source_key, settings.analysis, models["analysis"], request.get("story_notes", ""),
+        "A-event-inventory", [ANALYSIS_VERSION, source_key, settings.analysis, models["analysis"], request.get("story_notes", ""),
                               run.speech.get("cache_key")],
         lambda: analyze_footage(run.client, source, workdir, scenes, run.speech, request.get("story_notes", ""),
                                 source_duration, log), "event-inventory.json")
     if not run.inventory["events"]:
         raise ValueError("Gemini found no verifiable story events in the footage. Check the source window.")
+    source_flags = run.inventory.get("source_flags", {})
+    source_warnings = []
+    if source_flags.get("burned_in_captions"):
+        source_warnings.append("The source has burned-in captions; they will show under the new captions. "
+                               "Use clean footage for a publishable Short.")
+    if source_flags.get("voice_over_narration"):
+        source_warnings.append("The source has voice-over narration; it cannot be removed cleanly, and retained "
+                               "source-dialogue clips were disabled because narration and dialogue cannot be told apart.")
+        run.speech_pool = {}  # Never present an old narrator as "film dialogue".
+    for warning in source_warnings:
+        log("Gemini: SOURCE WARNING - " + warning)
+        run.record(stage="A", action="source_check", outcome="warning", warning=warning)
     # B — story map
     run.story_map = run.checkpoint(
         "B-story-map", [run.inventory, models["planning"], request.get("story_notes"), request.get("brief")],
@@ -370,7 +455,10 @@ def run_gemini_pipeline(request: dict, source: Path, source_duration: float, wor
     unresolved = [i for i in issues if i["severity"] == "critical"]
     review_status = "needs_human_review" if unresolved else (
         "passed_with_warnings" if any(i["severity"] == "major" for i in issues) else "passed_automated_review")
+    if source_warnings:
+        review_status = "needs_human_review"
     quality = {"review_status": review_status, "review_passes": settings.review_passes,
+               "source_warnings": source_warnings, "publishable_source": not source_warnings,
                "gemini_review_summaries": summaries, **summarize(issues),
                "note": "Automated review does not replace human playback review."}
     _write_json(outdir / "quality-review.json", quality)
@@ -386,6 +474,7 @@ def run_gemini_pipeline(request: dict, source: Path, source_duration: float, wor
             "beats": beats, "planning_mode": "gemini-multistage",
             "planning": {"version": PIPELINE_VERSION, "preset": settings.preset, "models": models,
                          "review_status": review_status, "planning_words_per_second": round(run.rate, 3),
+                         "planning_rate_source": run.rate_source,
                          "coverage": run.inventory["coverage"]}}
     run.ledger.save()
     return plan, run

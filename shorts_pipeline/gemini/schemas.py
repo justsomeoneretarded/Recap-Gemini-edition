@@ -54,6 +54,8 @@ class ObservedEvent(BaseModel):
 class WindowAnalysis(BaseModel):
     window_summary: str
     events: list[ObservedEvent]
+    burned_in_captions: bool = Field(False, description="True if added subtitles/captions are burned into the picture.")
+    voice_over_narration: bool = Field(False, description="True if a narrator (not a character on screen) talks over the footage.")
 
 
 class EventCheck(BaseModel):

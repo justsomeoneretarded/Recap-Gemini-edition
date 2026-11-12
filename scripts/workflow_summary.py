@@ -25,6 +25,8 @@ lines = ['## Generate Shorts result', '',
           if cost.get('max_budget_usd') is None and cost else
           f"- **Estimated Gemini cost:** ${cost.get('estimated_total_usd', 0):.4f} of ${cost.get('max_budget_usd') or 0:.2f} budget "
           "(estimate from token usage; AI Studio billing is authoritative)")]
+for warning in quality.get('source_warnings', []):
+    lines.append(f"- **Source warning:** {warning}")
 if status.get('fallback'):
     lines.append(f"- **Fallback used:** {status['fallback']['writer']} because {status['fallback']['reason'][:200]}")
 if cost.get('by_stage'):

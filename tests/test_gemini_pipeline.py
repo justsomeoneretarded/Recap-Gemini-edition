@@ -264,9 +264,26 @@ def test_short_footage_is_extended_from_verified_events_never_rendered_short(tmp
     generate(_request(source), tmp_path / "work", out, gemini_transport=transport,
              synthesize=FakeSynth(words_per_second=1.7))
     history = json.loads((out / "correction-history.json").read_text())
-    assert any(h.get("action") in ("event_footage_fallback", "remove_short_sentence") for h in history)
+    clip_notes = json.loads((out / "clip-plan.json").read_text())["notes"]
+    # Tight model cuts are first widened to their verified events; the fallback covers what remains.
+    assert (any("extended clips" in n for n in clip_notes)
+            or any(h.get("action") in ("event_footage_fallback", "remove_short_sentence") for h in history))
     timeline = json.loads((out / "timeline.json").read_text())
     for beat in timeline["beats"]:
         if beat["kind"] == "narration":
             assert all(shot["speed"] >= 0.85 for shot in beat["render_shots"])
     assert json.loads((out / "status.json").read_text())["state"] == "succeeded"
+
+
+def test_pre_narrated_source_is_flagged_and_its_narrator_never_kept_as_dialogue(tmp_path, source):
+    """V1-style footage: an already-narrated recap with burned-in captions is not a publishable source."""
+    transport = FakeTransport(events=synthetic_events(30))
+    transport.overrides["WindowAnalysis"] = lambda parts: {"window_summary": "recap", "events": transport.events,
+                                                           "burned_in_captions": True, "voice_over_narration": True}
+    out = tmp_path / "out"
+    generate(_request(source), tmp_path / "work", out, gemini_transport=transport, synthesize=FakeSynth())
+    quality = json.loads((out / "quality-review.json").read_text())
+    assert quality["publishable_source"] is False and len(quality["source_warnings"]) == 2
+    assert quality["review_status"] == "needs_human_review"
+    timeline = json.loads((out / "timeline.json").read_text())
+    assert all(b["kind"] == "narration" for b in timeline["beats"])  # The old narrator is not "dialogue".

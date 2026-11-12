@@ -113,6 +113,14 @@ The first number uses published Gemini 2.5 list prices. The second uses delibera
 
 Details are in [docs/gemini-architecture.md](docs/gemini-architecture.md).
 
+**Publishable output needs clean footage.** The analysis stage reports when a source has burned-in captions or voice-over narration. Such a run is marked `needs_human_review` with a source warning on the job page, and retained "dialogue" clips are disabled so an old narrator is never presented as a film character. Several other measures keep a Short from running out of picture:
+- Clips are widened to cover their whole verified event.
+- The narrator's real speaking speed is measured and saved for later runs.
+- An underlength Short is extended only into footage it already has.
+- Footage is never reused.
+
+So a 150-second Short needs roughly 4–6 minutes of clean source.
+
 Use clean movie/scene footage. The eight reference Shorts already contain narration and burned-in captions, so they are style references and test material, not production sources. A movie title alone cannot supply footage. For full films use **Source window**: Gemini analysis refuses sources longer than 45 minutes unless `max_source_minutes` is raised in a CLI request. The local preset keeps its original 120-span cap. YouTube downloading uses yt-dlp but can be blocked on runners; direct media URLs are reliable.
 
 ## Local setup

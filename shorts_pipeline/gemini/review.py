@@ -32,6 +32,7 @@ REVIEW_SYSTEM = (
     "For 'action' lines, check that the key_word's action or object is visible in the clip."
 )
 MIN_ACTION_SECONDS = 1.0
+FACTUAL_CHECKS = ("unsupported_statement", "unsupported_identity_or_dialogue", "shot_mismatch")
 
 
 def _issue(check, severity, description, fix="none", beat_id="", sentence_id="", start=None, end=None, origin="deterministic"):
@@ -184,6 +185,10 @@ def gemini_review(client: GeminiClient, file, beats: list[dict], *, inventory: d
                                      "ending": result.ending_score}, "strengths": result.strengths})
         for item in result.issues:
             issue = {**item.model_dump(), "origin": "gemini_review"}
+            if issue["check"] in FACTUAL_CHECKS and issue["severity"] == "minor":
+                # A wrong fact is never cosmetic in a published recap: make it actionable.
+                issue["severity"] = "major"
+                issue["description"] += " (escalated: factual accuracy)"
             if issue["beat_id"] and issue["beat_id"] not in ids:
                 issue["description"] += f" (unknown beat {issue['beat_id']!r} in review output)"
                 issue["beat_id"] = ""
