@@ -706,6 +706,7 @@ class GeminiClient:
         reasons: list[str] = []
         feedback = ""
         started = time.time()
+        call_started = time.monotonic()
         attempt = 0
         repairs = 0
         while True:
@@ -736,7 +737,10 @@ class GeminiClient:
                 # An overloaded or stalled model is abandoned sooner: the next candidate is usually free.
                 limit = self.settings.max_retries if category == "rate_limit" or patient else min(
                     self.settings.max_retries, self.settings.overload_attempts - 1)
-                if category in ("rate_limit", "timeout", "server") and attempt <= limit:
+                # One request may not hold the run: past max_call_seconds of stalls, hand it on (switch or wait).
+                stalled = (category in ("timeout", "server")
+                           and time.monotonic() - call_started > self.settings.max_call_seconds)
+                if category in ("rate_limit", "timeout", "server") and attempt <= limit and not stalled:
                     reasons.append(f"{category}: {message[:160]}")
                     delay = min(60.0, 2.0 * 2 ** (attempt - 1)) * (0.75 + 0.5 * random.random())
                     suggested = _retry_delay(message) if category == "rate_limit" else None

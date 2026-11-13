@@ -207,7 +207,9 @@ def plan_shots(beats: list[dict], matches: dict, rate: float, *, measured: dict 
             chosen, total, notes = [], 0.0, []
             for choice in sorted(match["shots"], key=lambda c: (-c.get("priority", 0), -c["relevance"])):
                 a, b = choice["start"], choice["end"]
-                for ua, ub, owner in used:
+                # Also against this sentence's own picks: its match and its event-footage fallback can
+                # name the same shot twice (run 15 placed S0028 and S0032 back to back).
+                for ua, ub, owner in used + [(c["start"], c["end"], sid) for c in chosen]:
                     if _overlap((a, b), (ua, ub)) > 0.25:
                         # Keep the larger non-overlapping remainder when it still holds the anchor.
                         left, right = (a, min(b, ua)), (max(a, ub), b)
