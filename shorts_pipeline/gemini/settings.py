@@ -123,7 +123,8 @@ class GeminiSettings:
     render_review: object
     explicit_cache: bool
     strict_review: bool = False
-    request_timeout_seconds: int = 600
+    request_timeout_seconds: int = 300  # One HTTP request; text calls answer in seconds, long video ones in ~2 min
+    max_call_seconds: float = 600.0  # Retrying one request past this (timeouts/5xx) hands it to the next model
     max_retries: int = 4
     overload_attempts: int = 3  # 503/504 tries on one model before moving to the next candidate
     overload_wait_seconds: float = 1200.0  # When every candidate is overloaded: wait and cycle back, up to this long

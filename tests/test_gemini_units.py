@@ -807,3 +807,60 @@ def test_a_rematch_that_finds_nothing_keeps_the_sentence_and_its_shots():
              "sentence_id": "N03.1", "description": "footage shows a fight"}
     _, changed, action = _fix(run, [beat], issue)
     assert changed is None and "kept" in action and run.matches["N03.1"]["shots"][0]["shot_id"] == "S0018"
+
+
+def test_one_stalled_request_cannot_hold_the_run(tmp_path, monkeypatch):
+    # Run 15 ran for hours with no output; one request retried on timeouts can now spend at most
+    # max_call_seconds before the stage moves to the next model.
+    import shorts_pipeline.gemini.client as client_module
+
+    clock = [0.0]
+    monkeypatch.setattr(client_module.time, "monotonic", lambda: clock[0])
+
+    class Slow(Scripted):
+        def generate(self, model, parts, **kwargs):
+            clock[0] += 400.0  # Each attempt times out after a long wait.
+            return super().generate(model, parts, **kwargs)
+
+    deadline = FakeAPIError("timeout", "504 DEADLINE_EXCEEDED")
+    transport = Slow([deadline, deadline, REVIEW])
+    client = make_client(tmp_path, transport)
+    first, second = client.settings.model_preferences["review"][:2]
+    client.settings.model_preferences["review"] = [first, second]
+    assert client.generate("review", QualityReview, [text_part("x")], system="s").verdict == "pass"
+    assert transport.calls == 3 and client.settings.resolved_models["review"] == second
+
+
+def test_a_sentence_never_gets_the_same_shot_twice():
+    # Run 15: a sentence's match and its event-footage fallback both named S0028 and S0032,
+    # so the same footage played twice back to back.
+    beats = [{"id": "N01", "kind": "narration", "text": "x",
+              "sentences": [{"sentence_id": "N01.1", "text": "One two three four five six seven eight nine ten.",
+                             "event_ids": ["EV1"]}]}]
+    matches = {"N01.1": {"verdict": "supported",
+                         "shots": [_choice("S28", 62.183, 64.817), {**_choice("S28", 62.183, 64.817), "focus_x": 0.65},
+                                   _choice("S29", 64.817, 67.833)]}}
+    placed, _, _ = plan_shots(beats, matches, rate=2.5)
+    ids = [s["shot_id"] for s in placed[0]["shots"]]
+    assert ids.count("S28") == 1 and "S29" in ids
+
+
+def test_shot_encode_bounds_the_source_audio_and_media_commands_time_out(monkeypatch, tmp_path):
+    # Run 15: the shot at 74.283 s never finished because the source audio branch never hit EOF
+    # inside amix; the job sat for 78 minutes.
+    import subprocess
+    from shorts_pipeline import render
+
+    seen = {}
+    monkeypatch.setattr(render, "_run", lambda args: seen.setdefault("args", args))
+    shot = {"start": 74.283, "end": 75.35, "duration": 1.0666667, "speed": 1.0, "frames": 64, "focus_x": 0.5}
+    render._render_shot(tmp_path / "s.mp4", shot, tmp_path / "o.mkv", 1080, 1080, 60, True)
+    graph = seen["args"][seen["args"].index("-filter_complex") + 1]
+    assert "aformat=channel_layouts=stereo,atrim=duration=1.066666700[source]" in graph
+
+    monkeypatch.undo()
+    def stuck(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], kwargs.get("timeout"))
+    monkeypatch.setattr(render.subprocess, "run", stuck)
+    with pytest.raises(RuntimeError, match="did not finish"):
+        render._run(["ffmpeg", "-i", "x"])

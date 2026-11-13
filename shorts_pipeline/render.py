@@ -17,8 +17,16 @@ import subprocess
 import tempfile
 
 
+MEDIA_COMMAND_TIMEOUT = 1800  # seconds; no single FFmpeg step of a <=180 s Short takes near this long
+
+
 def _run(args: list[str]) -> subprocess.CompletedProcess:
-    result = subprocess.run(args, capture_output=True, text=True)
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=MEDIA_COMMAND_TIMEOUT)
+    except subprocess.TimeoutExpired as exc:
+        # Run 15: one shot encode never finished and held the job for over an hour.
+        raise RuntimeError(f"Media command did not finish in {MEDIA_COMMAND_TIMEOUT}s "
+                           f"({Path(args[0]).name}): {' '.join(map(str, args))[-600:]}") from exc
     if result.returncode:
         raise RuntimeError(f"Media command failed ({Path(args[0]).name}):\n{result.stderr[-5000:]}")
     return result
@@ -257,7 +265,9 @@ def _render_shot(source: Path, shot: dict, target: Path, width: int, height: int
     silence = f"[1:a]atrim=duration={shot['duration']:.9f},asetpts=PTS-STARTPTS[bed]"
     if has_audio:
         af = (silence + f";[0:a]aresample=48000:async=1:first_pts=0,atempo={speed:.9f},"
-              "aformat=channel_layouts=stereo[source];"
+              # Bound the source branch too: on some clips its audio never reaches EOF after
+              # -ss/-t, and amix then waits forever (run 15 hung on S0032 at 74.283 s).
+              f"aformat=channel_layouts=stereo,atrim=duration={shot['duration']:.9f}[source];"
               "[bed][source]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]")
     else:
         af = silence.replace("[bed]", "[a]")
