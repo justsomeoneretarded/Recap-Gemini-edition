@@ -8,9 +8,11 @@ from google.genai import types  # noqa: E402
 
 from shorts_pipeline.gemini import schemas  # noqa: E402
 from shorts_pipeline.gemini.client import SdkTransport  # noqa: E402
+from shorts_pipeline.gemini import discovery  # noqa: E402
 
 ALL = [schemas.WindowAnalysis, schemas.VerificationResult, schemas.StoryMap, schemas.EditorialPlan,
-       schemas.ScriptDraft, schemas.ScriptRevision, schemas.BeatRewrite, schemas.MatchingResult, schemas.QualityReview]
+       schemas.ScriptDraft, schemas.ScriptRevision, schemas.BeatRewrite, schemas.MatchingResult, schemas.QualityReview,
+       discovery.StoryPlan, discovery.CandidateRanking, discovery.Screening]
 
 
 @pytest.mark.parametrize("schema", ALL, ids=lambda s: s.__name__)
@@ -66,3 +68,10 @@ def test_sdk_errors_are_classified_for_retry_and_reporting():
     invalid_key = errors.ClientError(400, {"error": {"code": 400, "status": "INVALID_ARGUMENT",
                                                      "message": "API key not valid. Please pass a valid API key."}})
     assert transport.classify(invalid_key)[0] == "auth"
+
+
+def test_youtube_links_become_file_data_parts_gemini_can_watch():
+    transport = SdkTransport.__new__(SdkTransport)
+    transport.types = types
+    part = transport._part(discovery.youtube_part("https://www.youtube.com/watch?v=abc", 40))
+    assert part.file_data.file_uri == "https://www.youtube.com/watch?v=abc" and part.video_metadata.fps == 0.5

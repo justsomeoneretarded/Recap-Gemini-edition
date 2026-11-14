@@ -314,6 +314,8 @@ class SdkTransport:
                 start_offset=f"{part['start']}s" if "start" in part else None,
                 end_offset=f"{part['end']}s" if "end" in part else None,
                 fps=part.get("fps"))
+        if "youtube_url" in part:  # Gemini watches a public YouTube video directly; nothing is downloaded.
+            return t.Part(file_data=t.FileData(file_uri=part["youtube_url"]), video_metadata=metadata)
         return t.Part(file_data=t.FileData(file_uri=part["file_uri"], mime_type=part["mime_type"]),
                       video_metadata=metadata)
 
