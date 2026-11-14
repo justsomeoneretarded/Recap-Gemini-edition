@@ -28,6 +28,15 @@ def generate(request: dict, workdir: Path, outdir: Path, *, gemini_transport=Non
         write_json(outdir/'status.json',status)
         print(f'Shorts: {name}',flush=True)
     try:
+        if str(request['source']).strip().lower().startswith('discover'):
+            # No footage supplied: find it on YouTube (see gemini/discovery.py), then run as usual on the pool.
+            from .gemini.discovery import discover_footage
+            if request['planner']!='gemini':
+                raise ValueError('source "discover" finds footage with Gemini; choose a Gemini preset.')
+            stage('discover footage')
+            pool,pool_notes = discover_footage(request,workdir,outdir,transport=gemini_transport)
+            request = {**request,'source':str(pool),'discovered_from':request['source'],
+                       'story_notes':(request.get('story_notes','')+'\n\n'+pool_notes).strip()}
         stage('source')
         source = resolve_source(request['source'],workdir)
         if request.get('source_window'):

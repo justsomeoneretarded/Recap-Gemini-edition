@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       source_url:
-        description: Direct HTTPS source footage URL (GitHub Release attachments work)
+        description: Direct HTTPS source footage URL (GitHub Release attachments work), or discover / discover:Film (Year) to find clips on YouTube
         required: true
         type: string
       brief:
@@ -110,6 +110,7 @@ jobs:
             work/production/source-speech
             work/production/speech
             work/production/gemini
+            work/production/discovery
           key: shorts-source-v2-${{ env.SHORTS_SOURCE_CACHE_KEY }}-${{ github.run_id }}
           restore-keys: shorts-source-v2-${{ env.SHORTS_SOURCE_CACHE_KEY }}-
       - name: Install CPU models and pipeline
@@ -148,6 +149,7 @@ jobs:
             work/production/source-speech
             work/production/speech
             work/production/gemini
+            work/production/discovery
           key: shorts-source-v2-${{ env.SHORTS_SOURCE_CACHE_KEY }}-${{ github.run_id }}
       - name: Upload video and review files
         if: always()
@@ -171,6 +173,8 @@ jobs:
             work/production/source-speech/*.json
             work/production/gemini/cache/diagnostics/*.json
             work/production/gemini/runs/**/*.json
+            work/production/discovery/*/pool-map.json
+            work/production/discovery/*/screen/*.json
           if-no-files-found: ignore
       - name: Upload rejected speech diagnostics
         if: always()

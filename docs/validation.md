@@ -80,3 +80,16 @@ Recommended first live check: run **Gemini Live Check**, then Generate Shorts wi
 - **The first Generate Shorts run on reference V1 failed at script writing.** Stages A–C worked on the real footage: 136.6 s analysed, 6 events re-verified, story map and editorial plan built, 8 requests in total.
 - **Cause:** the script draft was truncated twice. Its 8,192-token output limit was consumed by "high" thinking.
 - **Fix:** larger limits for the text stages, and a truncated response now retries once with double the limit (up to 65,536) instead of sending a repair request.
+
+## Footage discovery (14 November 2026)
+
+`source: discover` (`shorts_pipeline/gemini/discovery.py`) is covered by offline tests with a fake Gemini, a fake YouTube search and fake segment downloads. Those tests check:
+- trailer and recap filtering by title;
+- rejection of captioned uploads;
+- downloading of approved segments only, with handles;
+- the second search round for must-have moments;
+- the story-ordered pool;
+- caching across reruns;
+- the error that lists approved links when downloads are blocked.
+
+YouTube search and download, and Gemini watching YouTube links, had not been exercised live when this was written. YouTube search was blocked by the development sandbox's network proxy.

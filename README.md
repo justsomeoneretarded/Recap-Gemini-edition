@@ -71,6 +71,18 @@ The job page shows a summary: state, review status, rendered-file checks, and es
 
 `review_status` is `passed_automated_review`, `passed_with_warnings` or `needs_human_review`. **No result is marked production-ready**: watch it with sound before publishing. There is no automatic upload.
 
+### Let Gemini find the footage (`discover`)
+
+Put **`discover`** (or `discover:John Wick (2014)` to name the film) in **Source URL** instead of a video link:
+
+1. Gemini lists the film's famous or action moments in story order, plus the connected moments the story needs around each one, with broad YouTube searches for each (no trailers).
+2. The searches run on YouTube. Only metadata is read, and uploads titled as trailers, recaps, reactions, reviews or edits are dropped.
+3. Gemini picks the likeliest uploads, then **watches each one from its link without downloading it**. It marks the segments that show a story item and rejects the wrong film or unclean footage: narration over the film, burned-in captions, logos, or mirrored or sped-up copies.
+4. Must-have moments with no footage get a second search round.
+5. Only the approved segments are downloaded, with 3 seconds extra on each side. They are joined in story order into one footage pool, and the normal pipeline runs on that pool.
+
+`discovery-report.json` lists every story item, query, Gemini verdict, chosen segment and missing moment. Results are cached, so a rerun does not search, watch or download again. Limits: YouTube sometimes blocks downloads from GitHub's servers. When that happens the run stops and lists the approved links and times, so you can download those segments and supply them yourself. Real film clips can also draw copyright claims.
+
 ### Free tier: what to expect
 
 - **Cost:** $0. `cost-report.json` still lists tokens and the *paid-price equivalent* for comparison.
