@@ -17,8 +17,10 @@ every story item, query, verdict and chosen segment.
 """
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -76,6 +78,10 @@ class FoundSegment(BaseModel):
     confidence: float = Field(ge=0, le=1)
 
 
+class RefinedSegments(BaseModel):
+    segments: list[FoundSegment] = Field(default_factory=list)
+
+
 class Screening(BaseModel):
     same_film: bool = Field(description="The footage is from the requested film (not a sequel, remake or parody)")
     clean: bool = Field(description="No narration over the film, no burned-in captions or commentary, "
@@ -85,11 +91,53 @@ class Screening(BaseModel):
 
 
 # ------------------------------------------------------------------ YouTube I/O (replaceable in tests)
+def netscape_cookies(text: str) -> str:
+    """YT_COOKIES as a Netscape cookies.txt: accepts that format or a JSON export from a browser extension."""
+    text = text.replace("\r\n", "\n").strip()
+    if text.startswith("["):
+        lines = []
+        for c in json.loads(text):
+            domain = c.get("domain", "")
+            host_only = c.get("hostOnly", not domain.startswith("."))
+            expires = int(c.get("expirationDate") or c.get("expires") or 0)
+            lines.append("\t".join([domain, "FALSE" if host_only else "TRUE", c.get("path", "/"),
+                                    "TRUE" if c.get("secure") else "FALSE", str(max(0, expires)),
+                                    c.get("name", ""), c.get("value", "")]))
+        text = "\n".join(lines)
+    if not text.startswith("# Netscape HTTP Cookie File") and not text.startswith("# HTTP Cookie File"):
+        text = "# Netscape HTTP Cookie File\n" + text
+    return text + "\n"
+
+
+_COOKIE_FILE: list[str] = []
+
+
+def cookie_file() -> str | None:
+    """Write the YT_COOKIES secret to a private temporary file once per process; never logged."""
+    if _COOKIE_FILE:
+        return _COOKIE_FILE[0]
+    secret = os.environ.get("YT_COOKIES", "").strip()
+    if not secret:
+        return None
+    handle, path = tempfile.mkstemp(prefix="yt-cookies-", suffix=".txt")
+    with os.fdopen(handle, "w", encoding="utf-8") as stream:
+        stream.write(netscape_cookies(secret))
+    os.chmod(path, 0o600)
+    atexit.register(lambda: os.path.exists(path) and os.remove(path))
+    _COOKIE_FILE.append(path)
+    return path
+
+
+def _with_cookies(options: dict) -> dict:
+    path = cookie_file()
+    return {**options, "cookiefile": path} if path else options
+
+
 def youtube_search(query: str, limit: int = 8) -> list[dict]:
     import yt_dlp
 
-    with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "extract_flat": "in_playlist",
-                           "skip_download": True, "socket_timeout": 30}) as ydl:
+    with yt_dlp.YoutubeDL(_with_cookies({"quiet": True, "no_warnings": True, "extract_flat": "in_playlist",
+                                         "skip_download": True, "socket_timeout": 30})) as ydl:
         result = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
     found = []
     for entry in result.get("entries") or []:
@@ -113,7 +161,7 @@ def youtube_download_section(url: str, start: float, end: float, target: Path) -
                    "socket_timeout": 30, "retries": 2, "fragment_retries": 2, "cachedir": False,
                    "download_ranges": download_range_func(None, [(start, end)]), "force_keyframes_at_cuts": True,
                    "js_runtimes": {"deno": {}, "node": {}}}
-        with yt_dlp.YoutubeDL(options) as ydl:
+        with yt_dlp.YoutubeDL(_with_cookies(options)) as ydl:
             ydl.download([url])
         produced = [p for p in Path(temp).glob("part.*") if p.suffix in {".mp4", ".mkv", ".webm"}]
         if not produced:
@@ -226,15 +274,51 @@ def screen_video(client: GeminiClient, plan: StoryPlan, video: dict) -> Screenin
               "1. Is this footage from the requested film? 2. Is it clean (no narrator talking over the film, no "
               "burned-in subtitles or commentary text, no large logo, not mirrored, cropped or sped up)? "
               "3. List every segment that clearly shows one of the story items, with start and end in seconds "
-              "and what is visible. Leave out segments that do not match any item.")
+              "and what is visible. Keep segments tight around the action (3-40 s each); split a long scene into "
+              "several segments. Leave out title cards, end screens and anything that matches no item.")
     screening = client.generate("analysis:screen", Screening,
-                                [youtube_part(video["url"], video["duration"]), text_part(prompt)],
+                                [youtube_part(video["url"], video["duration"], 0.5 if video["duration"] <= 300 else 0.25),
+                                 text_part(prompt)],
                                 system=SCREEN_SYSTEM, temperature=0.1, max_output_tokens=8192, resolution="low")
     known = {i.item_id for i in plan.items}
     limit = video["duration"] + 1 if video["duration"] else float("inf")
     screening.segments = [s for s in screening.segments if s.item_id in known and 0 <= s.start < s.end <= limit
                           and s.end - s.start >= MIN_SEGMENT_SECONDS]
     return screening
+
+
+REFINE_SYSTEM = ("You mark exact shot boundaries in a film clip. Report only what is visible, in seconds from the "
+                 "start of the whole video. Return JSON matching the schema.")
+MAX_SEGMENT_SECONDS = 30.0
+MAX_REFINE_CALLS = 16
+
+
+def refine_segment(client: GeminiClient, item: StoryItem, video: dict, start: float, end: float) -> list[FoundSegment]:
+    """A closer look (1 frame/s) around a rough screening segment, for tight start and end times."""
+    duration = video["duration"] or end + 15
+    a, b = max(0.0, start - 15), min(duration, end + 15)
+    part = {**youtube_part(video["url"], duration, 1.0), "start": round(a, 3), "end": round(b, 3)}
+    prompt = (f"Watch {a:.0f}-{b:.0f} s of this video and find the exact moments that show: {item.title} — "
+              f"{item.what_happens}\nReturn 1-4 tight segments of 3-{MAX_SEGMENT_SECONDS:.0f} s each, start and end in "
+              "seconds from the start of the whole video, cut around the visible action. Leave out title cards, "
+              "logos, end screens and unrelated shots. Return no segments if the moment is not there.")
+    result = client.generate("analysis:refine", RefinedSegments, [part, text_part(prompt)], system=REFINE_SYSTEM,
+                             temperature=0.1, max_output_tokens=4096, resolution="low")
+    found = [s for s in result.segments if s.end > s.start]
+    # Some answers count from the start of the watched window; shift those into the video's time.
+    if found and all(s.end <= (b - a) + 0.5 for s in found) and not all(a - 0.5 <= s.start and s.end <= b + 0.5 for s in found):
+        for s in found:
+            s.start, s.end = s.start + a, s.end + a
+    tight = []
+    for s in found:
+        s.item_id = item.item_id
+        s.start, s.end = max(a, s.start), min(b, s.end)
+        if s.end - s.start > MAX_SEGMENT_SECONDS:
+            middle = (s.start + s.end) / 2
+            s.start, s.end = middle - MAX_SEGMENT_SECONDS / 2, middle + MAX_SEGMENT_SECONDS / 2
+        if s.end - s.start >= MIN_SEGMENT_SECONDS:
+            tight.append(s)
+    return tight
 
 
 # ------------------------------------------------------------------ main entry
@@ -344,6 +428,43 @@ def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=No
                            "url": candidates[video_id]["url"], "title": candidates[video_id]["title"],
                            "start": seg.start, "end": seg.end, "shows": seg.shows, "confidence": seg.confidence})
             spans.append((seg.start, seg.end))
+    # Closer look at each chosen stretch: screening at a frame every 2-4 s gives rough, often whole-clip spans.
+    items = {i.item_id: i for i in plan.items}
+    refined: list[dict] = []
+    refine_calls = 0
+    for c in chosen:
+        cache = base / "refine" / f"{c['video_id']}-{c['item_id']}-{c['start']:.1f}-{c['end']:.1f}.json"
+        try:
+            if cache.is_file():
+                tight = RefinedSegments.model_validate_json(cache.read_text()).segments
+            elif refine_calls >= MAX_REFINE_CALLS:
+                tight = []  # Request budget: keep the rough span, capped below.
+            else:
+                refine_calls += 1
+                log(f"Discovery: marking exact times for {c['item_title']} in {c['video_id']}")
+                tight = refine_segment(client, items[c["item_id"]], candidates[c["video_id"]], c["start"], c["end"])
+                _write_json(cache, RefinedSegments(segments=tight).model_dump())
+        except Exception as exc:  # noqa: BLE001 - keep the rough span, capped
+            c["refine_error"] = str(exc)[:200]
+            tight = []
+        if tight:
+            refined += [{**c, "start": s.start, "end": s.end, "shows": s.shows, "confidence": s.confidence,
+                         "rough": [c["start"], c["end"]]} for s in tight]
+        else:
+            middle = (c["start"] + c["end"]) / 2
+            half = min(MAX_SEGMENT_SECONDS, c["end"] - c["start"]) / 2
+            refined.append({**c, "start": middle - half, "end": middle + half, "rough": [c["start"], c["end"]]})
+    chosen = []
+    for item in plan.items:
+        total = 0.0
+        for c in sorted((r for r in refined if r["item_id"] == item.item_id), key=lambda r: -r["confidence"]):
+            if total >= per_item:
+                break
+            if any(o["video_id"] == c["video_id"] and c["start"] < o["end"] and c["end"] > o["start"] for o in chosen):
+                continue
+            chosen.append(c)
+            total += c["end"] - c["start"]
+    chosen.sort(key=lambda c: ([i.item_id for i in plan.items].index(c["item_id"]), c["video_id"], c["start"]))
     report["coverage"] = [{"item_id": i.item_id, "title": i.title, "must_have": i.must_have,
                            "seconds": round(sum(c["end"] - c["start"] for c in chosen if c["item_id"] == i.item_id), 1)}
                           for i in plan.items]

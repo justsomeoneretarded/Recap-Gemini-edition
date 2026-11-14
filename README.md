@@ -81,7 +81,7 @@ Put **`discover`** (or `discover:John Wick (2014)` to name the film) in **Source
 4. Must-have moments with no footage get a second search round.
 5. Only the approved segments are downloaded, with 3 seconds extra on each side. They are joined in story order into one footage pool, and the normal pipeline runs on that pool.
 
-`discovery-report.json` lists every story item, query, Gemini verdict, chosen segment and missing moment. Results are cached, so a rerun does not search, watch or download again. Limits: YouTube sometimes blocks downloads from GitHub's servers. When that happens the run stops and lists the approved links and times, so you can download those segments and supply them yourself. Real film clips can also draw copyright claims.
+A second, closer look at 1 frame per second then marks exact start and end times for each chosen stretch. YouTube blocks downloads from GitHub's servers ("Sign in to confirm you're not a bot"). Add your YouTube login cookies as a **`YT_COOKIES`** repository secret: paste a `cookies.txt` (Netscape format) or a JSON cookie export from a browser extension. The cookies are written to a private temporary file, never printed, and expire after a few weeks. A spare Google account is safer. `discovery-report.json` lists every story item, query, Gemini verdict, chosen segment and missing moment. Results are cached, so a rerun does not search, watch or download again. Limits: YouTube sometimes blocks downloads from GitHub's servers. When that happens the run stops and lists the approved links and times, so you can download those segments and supply them yourself. Real film clips can also draw copyright claims.
 
 ### Free tier: what to expect
 
