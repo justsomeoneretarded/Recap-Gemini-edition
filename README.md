@@ -80,7 +80,14 @@ Put **`discover`** (or `discover:John Wick (2014)` to name the film) in **Source
 2. The searches run on YouTube. Only metadata is read, and uploads titled as trailers, recaps, reactions, reviews or edits are dropped.
 3. Gemini picks the likeliest uploads, then **watches each one from its link without downloading it**. It marks the segments that show a story item and rejects the wrong film or unclean footage: narration over the film, burned-in captions, logos, or mirrored or sped-up copies.
 4. Must-have moments with no footage get a second search round.
-5. Only the approved segments are downloaded, with 3 seconds extra on each side. They are joined in story order into one footage pool, and the normal pipeline runs on that pool.
+5. Only the approved segments are downloaded, with 3 seconds extra on each side (never reaching into a neighbouring segment of the same upload). They are joined in story order into one footage pool.
+6. **Story-first production** (`shorts_pipeline/gemini/storyline.py`). Discovered footage does not go through the generic sentence-by-sentence matcher:
+   - The story is written from the discovery plan. It opens cold on the most gripping moment, then gives the premise (who the hero is, what he did, why he is hunted), then the remaining moments as a cause-and-effect chain, and ends on a payoff or the renewed threat.
+   - The writer gets opening excerpts from two reference recaps about other films as style examples.
+   - A story editor scores the script, and a weak script is rewritten once.
+   - Each sentence plays over continuous footage of its own story moment, and the moment it narrates lands on its key word.
+   - A Short that is too long or too short is fixed by rewriting whole beats. Sentences are never deleted.
+   - A final Gemini check flags narration that contradicts the picture.
 
 A second, closer look at 1 frame per second then marks exact start and end times for each chosen stretch. YouTube blocks downloads from GitHub's servers ("Sign in to confirm you're not a bot"). Add your YouTube login cookies as a **`YT_COOKIES`** repository secret: paste a `cookies.txt` (Netscape format) or a JSON cookie export from a browser extension. The cookies are written to a private temporary file, never printed, and expire after a few weeks. A spare Google account is safer. `discovery-report.json` lists every story item, query, Gemini verdict, chosen segment and missing moment. Results are cached, so a rerun does not search, watch or download again. Limits: YouTube sometimes blocks downloads from GitHub's servers. When that happens the run stops and lists the approved links and times, so you can download those segments and supply them yourself. Real film clips can also draw copyright claims.
 

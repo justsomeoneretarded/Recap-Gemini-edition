@@ -349,6 +349,20 @@ def refine_segment(client: GeminiClient, item: StoryItem, video: dict, start: fl
     return tight
 
 
+def handle_range(c: dict, chosen: list[dict], duration: float) -> tuple[float, float]:
+    """The segment plus its handles, never reaching into another chosen segment of the same video:
+    where two are close, the gap between them is split, so the pool never shows a moment twice."""
+    a, b = max(0.0, c["start"] - HANDLE_SECONDS), min(duration, c["end"] + HANDLE_SECONDS)
+    for o in chosen:
+        if o is c or o["video_id"] != c["video_id"]:
+            continue
+        if o["end"] <= c["start"]:
+            a = max(a, (o["end"] + c["start"]) / 2 if c["start"] - o["end"] < 2 * HANDLE_SECONDS else a)
+        elif o["start"] >= c["end"]:
+            b = min(b, (c["end"] + o["start"]) / 2 if o["start"] - c["end"] < 2 * HANDLE_SECONDS else b)
+    return round(a, 3), round(b, 3)
+
+
 # ------------------------------------------------------------------ main entry
 def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=None,
                      search: Callable = youtube_search, download: Callable = youtube_download_section,
@@ -371,6 +385,7 @@ def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=No
     log(f"Discovery: planning story items for {film}")
     plan = plan_story(client, request, film)
     report["story_plan"] = plan.model_dump()
+    _write_json(base / "story-plan.json", plan.model_dump())  # The storyline path writes from this plan.
     # Screening and refine answers name this plan's item ids, so their caches are per plan.
     plan_key = hashlib.sha256(plan.model_dump_json().encode()).hexdigest()[:10]
     save()
@@ -510,8 +525,7 @@ def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=No
     clips_dir, pooled = base / "segments", []
     clips_dir.mkdir(parents=True, exist_ok=True)
     for index, c in enumerate(chosen):
-        duration = candidates[c["video_id"]]["duration"] or (c["end"] + HANDLE_SECONDS)
-        a, b = max(0.0, c["start"] - HANDLE_SECONDS), min(duration, c["end"] + HANDLE_SECONDS)
+        a, b = handle_range(c, chosen, candidates[c["video_id"]]["duration"] or (c["end"] + HANDLE_SECONDS))
         raw = clips_dir / f"{c['video_id']}-{a:.1f}-{b:.1f}.mp4"
         norm = clips_dir / f"{c['video_id']}-{a:.1f}-{b:.1f}-norm.mp4"
         try:

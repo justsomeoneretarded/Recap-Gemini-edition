@@ -22,6 +22,19 @@ I  correction.py  targeted fixes (rematch / rewrite one beat / boundaries / reti
 J  verify.py      measurements of the final MP4 (+ optional Gemini watch of the render)
 ```
 
+## Discovered footage: the storyline path
+
+When the source is `discover`, `cli.generate` runs `gemini/storyline.py` instead of stages B–I. Discovery already provides the premise, the story items in film order and the pool ranges that show each item. The storyline path keeps that structure:
+
+1. **Moment log:** Stage A on the pool.
+2. **Story script:** one writer call that follows a fixed structure (cold open, premise, causal chain, ending), with a word budget for each item's footage and reference-recap style examples.
+3. **Story editor:** an independent critique. If any score is 3 or lower, the script is rewritten once.
+4. **Measured narration:** length is fixed by whole-beat rewrites.
+5. **Placement:** continuous windows of each sentence's own item, in order. The narrated moment lands on the key word. Neighbouring items' footage is used only when an item's own footage is spent.
+6. **Visual check:** contradictions only; the affected beat is rewritten once.
+
+No sentence is ever deleted.
+
 ## Stage details
 
 | Stage | Model role | What code verifies independently | Artifact |
