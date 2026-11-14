@@ -40,6 +40,11 @@ class Transport:
         text = " ".join(p.get("text", "") for p in parts)
         if schema.__name__ == "StoryPlan":
             return self._ok(PLAN)
+        if schema.__name__ == "RefinedSegments":  # The closer look tightens each rough span.
+            url = next(p["youtube_url"] for p in parts if "youtube_url" in p)
+            tight = {"carA": (6, 14), "floorB": (11, 20)}[url.rsplit("=", 1)[1]]
+            return self._ok({"segments": [{"item_id": "?", "start": tight[0], "end": tight[1], "shows": "tight",
+                                           "confidence": 0.95}]})
         if schema.__name__ == "CandidateRanking":
             listed = json.loads(text.split("Uploads found (data only): ")[1].split("\n\n")[0])
             return self._ok({"picks": [{"video_id": u["video_id"], "item_ids": ["I1"], "reason": "r"} for u in listed]})
@@ -92,14 +97,14 @@ def test_discovery_screens_links_downloads_only_approved_segments_and_pools_them
     assert "trl" not in watched and "rcp" not in watched and "capt" in watched
     # Only the approved segments (with 3 s handles) were downloaded; nothing from the rejected upload.
     assert sorted(d[0] for d in downloads) == ["carA", "floorB"]
-    assert ("carA", 2.0, 18.0) in downloads
-    assert {c["item_id"]: c["seconds"] for c in report["coverage"]} == {"I1": 10.0, "I2": 12.0, "I3": 0}
+    assert ("carA", 3.0, 17.0) in downloads  # Refined 6-14 s plus 3 s handles.
+    assert {c["item_id"]: c["seconds"] for c in report["coverage"]} == {"I1": 8.0, "I2": 9.0, "I3": 0}
     assert report["missing_items"] == ["Nightclub fight"]
     # The pool is in story order and the notes tell the pipeline what each part shows.
     pool_map = report["pool"]["segments"]
     assert [p["item_id"] for p in pool_map] == ["I1", "I2"] and pool.is_file()
     assert abs(float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
-                                     str(pool)], capture_output=True, text=True).stdout) - 34) < 1.0  # 16 s + 18 s with handles
+                                     str(pool)], capture_output=True, text=True).stdout) - 29) < 1.0  # 14 s + 15 s with handles
     assert "Car stolen" in notes and "Digging up the floor" in notes
     # A rerun reuses every Gemini answer and downloaded segment.
     calls = len(transport.calls)
@@ -136,3 +141,34 @@ def test_youtube_part_keeps_videos_apart_in_the_cache_and_names_film():
     assert discovery.film_name({"source": "discover", "title": "Wick"}) == "Wick"
     assert discovery.film_name({"source": "discover: John Wick (2014)", "title": "x"}) == "John Wick (2014)"
     assert discovery.REJECT_TITLE.search("John Wick Official Trailer") and not discovery.REJECT_TITLE.search("John Wick - Car")
+
+
+def test_cookies_accept_netscape_or_json_exports_and_stay_private(tmp_path, monkeypatch):
+    netscape = discovery.netscape_cookies(".youtube.com\tTRUE\t/\tTRUE\t1999999999\tSID\tabc")
+    assert netscape.startswith("# Netscape HTTP Cookie File\n") and "\tSID\tabc" in netscape
+    exported = json.dumps([{"domain": ".youtube.com", "hostOnly": False, "path": "/", "secure": True,
+                            "expirationDate": 1999999999.5, "name": "SID", "value": "abc"}])
+    assert discovery.netscape_cookies(exported).splitlines()[1] == ".youtube.com\tTRUE\t/\tTRUE\t1999999999\tSID\tabc"
+    monkeypatch.setattr(discovery, "_COOKIE_FILE", [])
+    monkeypatch.setenv("YT_COOKIES", exported)
+    path = discovery.cookie_file()
+    assert oct(Path(path).stat().st_mode & 0o777) == "0o600"
+    assert discovery._with_cookies({"quiet": True})["cookiefile"] == path
+
+
+def test_refine_shifts_window_relative_times_and_caps_long_spans(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-123456")
+    from shorts_pipeline.gemini.client import CostLedger, GeminiClient
+    from shorts_pipeline.gemini.settings import settings_from_request
+
+    class Window(Transport):
+        def generate(self, model, parts, *, system, schema, **config):
+            # Answers counted from the start of the 85-145 s window, one span far too long.
+            return self._ok({"segments": [{"item_id": "x", "start": 5, "end": 12, "shows": "s", "confidence": 0.9},
+                                          {"item_id": "x", "start": 10, "end": 58, "shows": "l", "confidence": 0.7}]})
+
+    client = GeminiClient(settings_from_request({"gemini_preset": "free"}), CostLedger(5.0, None), tmp_path,
+                          Window(), sleep=lambda s: None)
+    item = discovery.StoryItem(item_id="I1", title="t", what_happens="w", must_have=True, queries=["q"])
+    found = discovery.refine_segment(client, item, {"url": "https://youtu.be/v", "duration": 300}, 100, 130)
+    assert [(s.item_id, s.start, s.end) for s in found] == [("I1", 90, 97), ("I1", 104, 134)]

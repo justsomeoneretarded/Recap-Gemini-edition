@@ -90,6 +90,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
           GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
         run: |
           if [ -z "$GEMINI_API_KEY" ]; then
             echo "::error::Add a GEMINI_API_KEY repository secret (Settings → Secrets and variables → Actions), or choose the local-gemma4 preset."
@@ -99,6 +100,7 @@ jobs:
           [ -n "$GEMINI_API_KEY_2" ] && extra=$((extra + 1))
           [ -n "$GEMINI_API_KEY_3" ] && extra=$((extra + 1))
           echo "Gemini keys: GEMINI_API_KEY plus $extra extra key(s) for daily-quota fallback."
+          if [ -n "$YT_COOKIES" ]; then echo "YouTube cookies: set (used by source discover)"; else echo "YouTube cookies: not set"; fi
       - name: Restore footage and analysis cache
         id: source-cache
         uses: actions/cache/restore@v4
@@ -132,6 +134,9 @@ jobs:
           # Optional extra free-tier keys: used in order when a model's daily quota is used up on the earlier keys.
           GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
           GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          # Optional YouTube login cookies (cookies.txt or a JSON export) for source "discover"; written to a
+          # private temporary file, never printed.
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
           # Optional, non-secret repository variable with current list prices for cost estimates.
           SHORTS_GEMINI_PRICES: ${{ vars.GEMINI_PRICES_JSON }}
         run: python -m shorts_pipeline generate --request work/request.json --workdir work/production --output output/shorts
