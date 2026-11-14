@@ -44,6 +44,7 @@ Open **Actions → Generate Shorts → Run workflow** and fill in:
 |---|---|---|
 | `rpm=8` | Free tier: Gemini requests per minute (lower it if you see rate-limit retries) | 8 |
 | `max_requests=150` | Free tier: request cap per run, protecting the daily quota | 150 |
+| `pace=1.2` | Narration speed (0.8–1.5), applied before words are timed so captions and cuts stay in sync | 1.2 |
 | `budget=3` | Paid presets: maximum estimated spend in USD | quality 8 · balanced 3 · economy 1 |
 | `review_passes=2` | Independent review → targeted-correction rounds (0–4) | free 1 · quality 2 · balanced 2 · economy 1 |
 | `analysis=detailed` | Video analysis quality: `fast`, `standard`, `detailed` | free standard (≤6 zoom checks) · quality detailed · balanced standard · economy fast |

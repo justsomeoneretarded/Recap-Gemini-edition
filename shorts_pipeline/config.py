@@ -7,7 +7,7 @@ DEFAULTS = {'brief': '', 'story_notes': '', 'narrator': 'warguy', 'tts_model': '
             'ollama_url': 'http://127.0.0.1:11434', 'max_scenes': 120,
             'auto_source_speech': True, 'caption_style': 'reference_word_fade',
             'planner': 'gemini', 'gemini_preset': 'free', 'fallback_writer': 'none',
-            'forced_alignment': 'off', 'script_mode': 'hybrid'}
+            'forced_alignment': 'off', 'script_mode': 'hybrid', 'narration_speed': 1.2}
 LOCAL_WRITERS = ('gemma4:12b', 'qwen3:4b-instruct-2507-q4_K_M')
 
 
@@ -29,6 +29,10 @@ def request_config(data: dict) -> dict:
         raise ValueError('auto_source_speech must be true or false.')
     if result['caption_style'] not in ('reference_word_fade','static'):
         raise ValueError('caption_style must be reference_word_fade or static.')
+    speed = float(result['narration_speed'])
+    if not math.isfinite(speed) or not 0.8 <= speed <= 1.5:
+        raise ValueError('narration_speed must be between 0.8 and 1.5.')
+    result['narration_speed'] = speed
     duration = float(result['target_seconds'])
     if not math.isfinite(duration) or not 15 <= duration <= 180:
         raise ValueError('target_seconds must be between 15 and 180.')

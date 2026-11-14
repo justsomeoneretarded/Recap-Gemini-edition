@@ -203,3 +203,26 @@ def test_real_whisper_mishearings_and_zero_length_words_align():
         aligned=_align_script(case['text'],case['recognized'],case['duration'])
         assert [w['word'] for w in aligned]==case['text'].split()
         assert all(w['end']>w['start'] for w in aligned)
+
+
+def test_narration_is_sped_up_before_timing_and_the_setting_is_checked(tmp_path):
+    import subprocess
+    import pytest
+    from shorts_pipeline.voice import _speed_up, _duration
+    from shorts_pipeline.config import request_config
+
+    audio = tmp_path / "take.wav"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=24000:duration=6",
+                    str(audio)], check=True)
+    _speed_up(audio, 1.2)
+    assert abs(_duration(audio) - 5.0) < 0.05  # 6 s at 1.2x
+    assert request_config({"title": "t", "source": "s"})["narration_speed"] == 1.2
+    with pytest.raises(ValueError, match="narration_speed"):
+        request_config({"title": "t", "source": "s", "narration_speed": 2})
+
+
+def test_workflow_pace_option_sets_narration_speed():
+    import sys
+    sys.path.insert(0, "scripts")
+    from workflow_request import parse_options
+    assert parse_options("pace=1.1") == {"narration_speed": 1.1}

@@ -176,7 +176,8 @@ def test_review_driven_rematch_replaces_a_mismatched_shot(tmp_path, source):
     out = tmp_path / "out"
     generate(_request(source), tmp_path / "work", out, gemini_transport=transport, synthesize=FakeSynth())
     history = json.loads((out / "correction-history.json").read_text())
-    fix = next(h for h in history if h.get("stage") == "I")
+    # (The fake's short, unlinked sentences may also be flagged as frame-by-frame narration and rewritten.)
+    fix = next(h for h in history if h.get("stage") == "I" and "N01.1" in h.get("action", ""))
     assert fix["outcome"] == "applied" and "re-matched N01.1" in fix["action"]
     matching_calls = [c for c in transport.calls if c["schema"] == "MatchingResult"]
     assert '"N01.1"' in matching_calls[-1]["parts"][-1]["text"]

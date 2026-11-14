@@ -163,7 +163,7 @@ def test_refine_shifts_window_relative_times_and_caps_long_spans(tmp_path, monke
 
     class Window(Transport):
         def generate(self, model, parts, *, system, schema, **config):
-            # Answers counted from the start of the 85-145 s window, one span far too long.
+            # Answers counted from the start of the 75-155 s window, one span far too long.
             return self._ok({"segments": [{"item_id": "x", "start": 5, "end": 12, "shows": "s", "confidence": 0.9},
                                           {"item_id": "x", "start": 10, "end": 58, "shows": "l", "confidence": 0.7}]})
 
@@ -171,4 +171,14 @@ def test_refine_shifts_window_relative_times_and_caps_long_spans(tmp_path, monke
                           Window(), sleep=lambda s: None)
     item = discovery.StoryItem(item_id="I1", title="t", what_happens="w", must_have=True, queries=["q"])
     found = discovery.refine_segment(client, item, {"url": "https://youtu.be/v", "duration": 300}, 100, 130)
-    assert [(s.item_id, s.start, s.end) for s in found] == [("I1", 90, 97), ("I1", 104, 134)]
+    assert [(s.item_id, s.start, s.end) for s in found] == [("I1", 80, 87), ("I1", 94, 124)]
+
+
+def test_black_bars_are_cropped_from_widescreen_clips(tmp_path):
+    letterboxed = tmp_path / "wide.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x274:rate=24:duration=8",
+                    "-vf", "pad=640:360:0:43:black", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(letterboxed)],
+                   check=True)
+    crop = discovery.detect_crop(letterboxed)
+    assert crop and crop.startswith("crop=640:27")
+    assert discovery.detect_crop(make_source(tmp_path / "full.mp4", 8)) is None

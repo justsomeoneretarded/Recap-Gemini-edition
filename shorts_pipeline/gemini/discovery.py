@@ -49,6 +49,8 @@ class StoryItem(BaseModel):
     item_id: str = Field(description="Short id such as I1, I2 in story order")
     title: str = Field(description="A few words naming the moment, e.g. 'Car stolen at the gas station'")
     what_happens: str = Field(description="What is visibly on screen in this moment, concretely")
+    story_context: str = Field("", description="Why this moment matters to the story: who wants what, what is at "
+                                               "stake, what it leads to (for the narrator, from your film knowledge)")
     must_have: bool = Field(description="True if the story does not make sense without this moment")
     connects_to: list[str] = Field(default_factory=list, description="item_ids this moment leads to or explains")
     queries: list[str] = Field(description="3-6 broad, short YouTube searches people would actually title uploads with")
@@ -57,6 +59,8 @@ class StoryItem(BaseModel):
 class StoryPlan(BaseModel):
     film: str
     year: int | None = None
+    premise: str = Field("", description="2-3 sentences a newcomer needs first: who the hero is, what happened "
+                                         "before, why he is in danger now")
     items: list[StoryItem]
 
 
@@ -212,10 +216,30 @@ def _has_audio(path: Path) -> bool:
     return bool(out.strip())
 
 
+def detect_crop(path: Path) -> str | None:
+    """Black bars baked into the picture (widescreen film clips): an ffmpeg crop filter, or None."""
+    duration = _probe_duration(path)
+    result = subprocess.run(["ffmpeg", "-hide_banner", "-ss", f"{max(0.0, duration / 2 - 3):.2f}", "-t", "6",
+                             "-i", str(path), "-vf", "cropdetect=limit=24:round=2:reset=0", "-f", "null", "-"],
+                            capture_output=True, text=True, timeout=300)
+    found = re.findall(r"crop=(\d+):(\d+):(\d+):(\d+)", result.stderr)
+    size = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+                           "-of", "csv=p=0", str(path)], capture_output=True, text=True, timeout=120).stdout.strip()
+    if not found or "," not in size:
+        return None
+    w, h, x, y = map(int, found[-1])
+    width, height = map(int, size.split(",")[:2])
+    # Only real bars: a clearly smaller picture that is still most of the frame.
+    if (h < height * 0.95 or w < width * 0.95) and h > height * 0.4 and w > width * 0.4:
+        return f"crop={w}:{h}:{x}:{y}"
+    return None
+
+
 def normalize_segment(source: Path, target: Path) -> Path:
-    """One format for every pooled clip: 1920x1080, 30 fps, H.264 + 48 kHz stereo AAC."""
-    video = ("scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
-             "setsar=1,fps=30,format=yuv420p")
+    """One format for every pooled clip: black bars removed, 1920x1080, 30 fps, H.264 + 48 kHz stereo AAC."""
+    crop = detect_crop(source)
+    video = ((crop + "," if crop else "") + "scale=1920:1080:force_original_aspect_ratio=increase,"
+             "crop=1920:1080,setsar=1,fps=30,format=yuv420p")
     args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source)]
     if _has_audio(source):
         args += ["-map", "0:v:0", "-map", "0:a:0", "-af", "aresample=48000,aformat=channel_layouts=stereo"]
@@ -240,14 +264,18 @@ def plan_story(client: GeminiClient, request: dict, film: str) -> StoryPlan:
     target = float(request.get("target_seconds", 100))
     prompt = (f"Film: {film}\nShort title: {request['title']}\nBrief: {request.get('brief', '')}\n"
               f"Notes: {request.get('story_notes', '')}\nTarget narration: about {target:.0f} seconds.\n\n"
-              "List 6-10 story items in the order they happen in the film:\n"
-              "- the film's most famous or action-packed moments, and\n"
+              "Plan a recap that someone who never saw the film can follow from start to end. Write the premise "
+              "(who the hero is, what happened before, why he is in danger). Then list 6-10 story items in the order "
+              "they happen in the film:\n"
+              "- first the moment that sets up the story (the inciting event, e.g. the bounty being placed), then "
+              "the film's most famous or action-packed moments, and the ending;\n"
               "- for each, the connected moments the story needs around it (what leads to it and what follows), "
-              "so the recap tells a clear cause-and-effect story.\n"
+              "so the recap tells a clear cause-and-effect story;\n"
+              "- for each, story_context: why it matters (who wants what, what is at stake, what it leads to).\n"
               "For every item give 3-6 broad YouTube searches, short and varied, the way people title uploads "
               "(for example 'john wick car', 'john wick garage fight', 'john wick 2014 ending'). "
               "Do not search for trailers. Do not end every query with 'scene'. Mark must_have only for "
-              "moments the story cannot do without.")
+              "moments the story cannot do without, always including the setup and the ending.")
     return client.generate("planning:story_items", StoryPlan, [text_part(prompt)], system=PLAN_SYSTEM,
                            temperature=0.4, max_output_tokens=8192)
 
@@ -296,7 +324,7 @@ MAX_REFINE_CALLS = 16
 def refine_segment(client: GeminiClient, item: StoryItem, video: dict, start: float, end: float) -> list[FoundSegment]:
     """A closer look (1 frame/s) around a rough screening segment, for tight start and end times."""
     duration = video["duration"] or end + 15
-    a, b = max(0.0, start - 15), min(duration, end + 15)
+    a, b = max(0.0, start - 25), min(duration, end + 25)
     part = {**youtube_part(video["url"], duration, 1.0), "start": round(a, 3), "end": round(b, 3)}
     prompt = (f"Watch {a:.0f}-{b:.0f} s of this video and find the exact moments that show: {item.title} — "
               f"{item.what_happens}\nReturn 1-4 tight segments of 3-{MAX_SEGMENT_SECONDS:.0f} s each, start and end in "
@@ -343,6 +371,8 @@ def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=No
     log(f"Discovery: planning story items for {film}")
     plan = plan_story(client, request, film)
     report["story_plan"] = plan.model_dump()
+    # Screening and refine answers name this plan's item ids, so their caches are per plan.
+    plan_key = hashlib.sha256(plan.model_dump_json().encode()).hexdigest()[:10]
     save()
 
     candidates: dict[str, dict] = {}
@@ -377,7 +407,7 @@ def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=No
             if pick.video_id in screenings:
                 continue
             video = candidates[pick.video_id]
-            cache = base / "screen" / f"{pick.video_id}.json"
+            cache = base / "screen" / f"{plan_key}-{pick.video_id}.json"
             if cache.is_file():
                 result = Screening.model_validate_json(cache.read_text())
             else:
@@ -415,12 +445,13 @@ def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=No
 
     found = coverage()
     target = float(request.get("target_seconds", 100))
-    per_item = min(60.0, max(12.0, 1.6 * target / max(1, len(plan.items))))
+    per_item = min(90.0, max(20.0, 2.2 * target / max(1, len(plan.items))))
+    per_item_segments = 3
     chosen: list[dict] = []
     for item in plan.items:
         spans: list[tuple[float, float]] = []
         for video_id, seg in sorted(found[item.item_id], key=lambda vs: -vs[1].confidence):
-            if _merged_seconds(spans) >= per_item:
+            if _merged_seconds(spans) >= per_item or len(spans) >= per_item_segments:
                 break
             if any(c["video_id"] == video_id and seg.start < c["end"] and seg.end > c["start"] for c in chosen):
                 continue
@@ -433,7 +464,7 @@ def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=No
     refined: list[dict] = []
     refine_calls = 0
     for c in chosen:
-        cache = base / "refine" / f"{c['video_id']}-{c['item_id']}-{c['start']:.1f}-{c['end']:.1f}.json"
+        cache = base / "refine" / f"{plan_key}-{c['video_id']}-{c['item_id']}-{c['start']:.1f}-{c['end']:.1f}.json"
         try:
             if cache.is_file():
                 tight = RefinedSegments.model_validate_json(cache.read_text()).segments
@@ -457,12 +488,14 @@ def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=No
     chosen = []
     for item in plan.items:
         total = 0.0
+        taken = 0
         for c in sorted((r for r in refined if r["item_id"] == item.item_id), key=lambda r: -r["confidence"]):
-            if total >= per_item:
+            if total >= per_item or taken >= per_item_segments + 1:
                 break
             if any(o["video_id"] == c["video_id"] and c["start"] < o["end"] and c["end"] > o["start"] for o in chosen):
                 continue
             chosen.append(c)
+            taken += 1
             total += c["end"] - c["start"]
     chosen.sort(key=lambda c: ([i.item_id for i in plan.items].index(c["item_id"]), c["video_id"], c["start"]))
     report["coverage"] = [{"item_id": i.item_id, "title": i.title, "must_have": i.must_have,
@@ -510,7 +543,9 @@ def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=No
         pool_map.append({"pool_start": round(offset, 3), "pool_end": round(offset + length, 3), "item_id": p["item_id"],
                          "item_title": p["item_title"], "video_id": p["video_id"], "url": p["url"],
                          "source_start": p["downloaded_start"], "source_end": p["downloaded_end"], "shows": p["shows"]})
-        notes.append(f"[{offset:.0f}-{offset + length:.0f}s] {p['item_title']}: {p['shows']}")
+        why = items[p["item_id"]].story_context
+        notes.append(f"[{offset:.0f}-{offset + length:.0f}s] {p['item_title']}: shows {p['shows']}"
+                     + (f". Why it matters: {why}" if why else ""))
         offset += length
     _write_json(base / "pool-map.json", pool_map)
     report["pool"] = {"seconds": round(offset, 1), "segments": pool_map}
@@ -518,5 +553,6 @@ def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=No
     save()
     ledger.save()
     log(f"Discovery: footage pool ready, {offset:.0f}s from {len({p['video_id'] for p in pooled})} upload(s)")
-    story = (f"Film: {plan.film}. The footage is a pool of film clips joined in story order:\n" + "\n".join(notes))
+    story = (f"Film: {plan.film}. Premise: {plan.premise}\nThe footage is a pool of film clips joined in story "
+             "order:\n" + "\n".join(notes))
     return pool, story
