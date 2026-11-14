@@ -29,10 +29,31 @@ REVIEW_SYSTEM = (
     "wrong footage; major = clear quality defect; minor = polish), the beat/sentence ID, source seconds and a "
     "fix type. Do not report something as a problem unless you can point to it. Lines of kind 'context' "
     "deliberately play over related cover footage: check only that it is related and does not contradict the line. "
-    "For 'action' lines, check that the key_word's action or object is visible in the clip."
+    "For 'action' lines, check that the key_word's action or object is visible in the clip. Narration should "
+    "tell the story: intent, stakes and consequences supported by the story notes are not mismatches; flag only "
+    "statements the footage contradicts. Flag narration that reads like a frame-by-frame description of the "
+    "picture (one micro-action per sentence, no cause and effect) as check 'pacing', severity major, fix "
+    "rewrite_beat."
 )
 MIN_ACTION_SECONDS = 1.0
 FACTUAL_CHECKS = ("unsupported_statement", "unsupported_identity_or_dialogue", "shot_mismatch")
+
+
+CONNECTIVES = frozenset("so but because when as after before until while which then to since though although "
+                        "once if unless meaning means why who while".split())
+
+
+def play_by_play(sentences: list[str]) -> bool:
+    """Three or more short sentences in a row with no cause-and-effect words: a frame-by-frame description
+    of the picture ('John picks up a book. He throws the book. The book falls.')."""
+    run = 0
+    for text in sentences:
+        words = [w.strip(".,!?;:'\"—-").lower() for w in text.split()]
+        bare = len(words) <= 10 and not any(w in CONNECTIVES for w in words)
+        run = run + 1 if bare else 0
+        if run >= 3:
+            return True
+    return False
 
 
 def _issue(check, severity, description, fix="none", beat_id="", sentence_id="", start=None, end=None, origin="deterministic"):
@@ -102,6 +123,10 @@ def deterministic_checks(beats: list[dict], *, inventory: dict, speech_pool: dic
                 if name.casefold() not in allowed_names:
                     issues.append(_issue("unsupported_identity_or_dialogue", "major", f"name '{name}' is not in the "
                                          "story notes, source dialogue or on-screen text evidence", "rewrite_beat", beat["id"], sid))
+    for beat in beats:
+        if beat["kind"] == "narration" and play_by_play([s["text"] for s in beat["sentences"]]):
+            issues.append(_issue("pacing", "major", "reads like a frame-by-frame description of the picture; tell what "
+                                 "happens and why it matters instead", "rewrite_beat", beat["id"]))
     allocation = dry_run_allocation(beats, source_duration, fps)
     for beat_id, shots in allocation.items():
         for shot in shots:

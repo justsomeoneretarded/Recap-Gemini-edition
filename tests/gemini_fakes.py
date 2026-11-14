@@ -241,7 +241,7 @@ class FakeSynth:
         self.rate = words_per_second
         self.calls = 0
 
-    def __call__(self, plan, narrator, workdir, model="original"):
+    def __call__(self, plan, narrator, workdir, model="original", speed=1.0):
         out = dict(plan)
         beats = []
         directory = Path(workdir) / "fake-speech"
@@ -251,7 +251,7 @@ class FakeSynth:
             if beat["kind"] == "narration" and not beat.get("words"):
                 self.calls += 1
                 tokens = beat["text"].split()
-                duration = round(len(tokens) / self.rate + 0.2, 3)
+                duration = round(len(tokens) / (self.rate * speed) + 0.2, 3)
                 path = directory / f"{abs(hash(beat['text']))}.wav"
                 if not path.exists():
                     subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",

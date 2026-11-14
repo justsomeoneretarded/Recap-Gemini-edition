@@ -83,7 +83,8 @@ class Run:
         self.speech_pool = _source_speech_pool(self.speech.get("candidates") or [], self.duration)
         self.target = float(request["target_seconds"])
         self.fps = int(request.get("fps", 60))
-        self.rate = planning_rate(request["narrator"], request["tts_model"])
+        self.speed = float(request.get("narration_speed", 1.0))
+        self.rate = planning_rate(request["narrator"], request["tts_model"]) * self.speed
         self.rate_source = "measured 13-word validation clips"
         calibrated = self._calibration().get(self._voice_key())
         if calibrated:
@@ -131,7 +132,8 @@ class Run:
     def synthesize(self, beats: list[dict]) -> list[dict]:
         started = time.time()
         plan = {"beats": copy.deepcopy(beats), "source_path": str(self.source)}
-        result = self._synthesize(plan, self.request["narrator"], self.workdir, model=self.request["tts_model"])
+        result = self._synthesize(plan, self.request["narrator"], self.workdir, model=self.request["tts_model"],
+                                  speed=self.speed)
         beats = result["beats"]
         mode = self.request.get("forced_alignment", "off")
         if mode != "off":
@@ -152,7 +154,9 @@ class Run:
 
     # ---- measured voice speed
     def _voice_key(self) -> str:
-        return f"{self.request['narrator']}|{self.request['tts_model']}"
+        speed = float(self.request.get("narration_speed", 1.0))
+        base = f"{self.request['narrator']}|{self.request['tts_model']}"
+        return base if abs(speed - 1.0) < 1e-3 else f"{base}|x{speed:g}"
 
     def _calibration(self) -> dict:
         try:
@@ -344,7 +348,8 @@ def _expand_if_short(run: Run, beats: list[dict], evidence: list[dict]) -> list[
             continue
         try:
             beats = run.rewrite(beats, beat_id, f"the Short is {total:.0f}s against a {run.target:.0f}s target and this "
-                                "beat's footage has unused time: add concrete, supported detail from its cited events "
+                                "beat's footage has unused time: add story meaning from its cited events and the story notes (why it happens, "
+                                "what is at stake, what it leads to), not more description of the picture "
                                 "(no new events, no padding)", min_words=words + extra // 2, max_words=words + extra)
             room -= add_seconds
             changed = True

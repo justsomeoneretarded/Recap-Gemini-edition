@@ -87,7 +87,8 @@ def generate(request: dict, workdir: Path, outdir: Path, *, gemini_transport=Non
         write_json(outdir/'storyboard.json',plan)
         stage('narration')
         if plan.get('planning_mode')!='gemini-multistage':  # Gemini plans are already measured/synced.
-            plan = (synthesize or synthesize_plan)(plan,request['narrator'],workdir,model=request['tts_model'])
+            plan = (synthesize or synthesize_plan)(plan,request['narrator'],workdir,model=request['tts_model'],
+                                                   speed=request['narration_speed'])
         plan = assign_timeline(plan,request['target_seconds'])
         write_json(outdir/'timeline.json',plan)
         width,height = (1080,1080) if request['aspect']=='square' else (1080,1920)

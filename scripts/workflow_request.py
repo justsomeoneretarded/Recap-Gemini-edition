@@ -12,7 +12,7 @@ PRESETS = {'gemini-free':('gemini','free'),'gemini-balanced':('gemini','balanced
 OPTION_KEYS = {'budget':'max_budget_usd','review_passes':'review_passes','analysis':'analysis_quality',
                'fallback':'fallback_writer','speech':'tts_model','alignment':'forced_alignment',
                'strict':'strict_review','writer':'script_model','rpm':'requests_per_minute',
-               'max_requests':'max_requests'}
+               'max_requests':'max_requests', 'pace':'narration_speed'}
 
 
 def parse_options(text: str) -> dict:
@@ -26,7 +26,7 @@ def parse_options(text: str) -> dict:
         name = OPTION_KEYS[key]
         if name == 'max_budget_usd':
             value = float(value.lstrip('$'))
-        elif name == 'requests_per_minute':
+        elif name in ('requests_per_minute', 'narration_speed'):
             value = float(value)
         elif name in ('review_passes', 'max_requests'):
             value = int(value)

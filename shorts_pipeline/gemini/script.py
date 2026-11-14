@@ -17,24 +17,30 @@ from .client import GeminiClient, text_part
 from .schemas import BeatRewrite, ScriptBeat, ScriptDraft, ScriptRevision
 from .story import evidence_parts, with_repair
 
+NARRATION_RULE = (
+    "NARRATE THE STORY, NOT THE PICTURE. Each sentence says what happens in the story and why it matters: who wants what, what is at stake, what changes. Never narrate on-screen micro-actions one by one ('John picks up a book. He throws the book. The book falls.'); the footage already shows those. Instead: 'Ernest corners John between the stacks, so John grabs the only weapon in reach: a book.' Link sentences with cause and effect (so, but, because, when, until, which means). "
+)
 STYLE_GUIDE = (
-    "Style evidence from eight reference recaps (docs/reference-analysis.md): open on a concrete, visible "
-    "action or contradiction (a chisel, a cup, a rifle), not a dossier; explain only the minimum cause needed, "
-    "delaying backstory until the hook has landed; move in cause-and-effect steps where each beat changes the "
-    "situation; let selected original dialogue carry threats or reversals; name specific objects and verbs the "
-    "camera can show; end with a story-appropriate payoff, reveal, reflection or renewed threat."
+    "Style evidence from eight reference recaps (docs/reference-analysis.md): open on a concrete, striking "
+    "moment, then make the situation clear fast: who the hero is, what happened, why he is in danger, so a viewer "
+    "who never saw the film can follow; move in cause-and-effect steps where each beat changes the situation; "
+    "let selected original dialogue carry threats or reversals, never as the very first beat; keep one concrete "
+    "object or action per line as an anchor for the picture; end with a story-appropriate payoff, reveal, "
+    "reflection or renewed threat. " + NARRATION_RULE
 )
 WRITER_SYSTEM = (
     "You are a skilled human movie recapper writing narration for a short recap video. Write like a "
     "storyteller, not a summarizer: concrete actions, clear motivations only when supported, concise complete "
     "sentences, natural suspense, varied phrasing, few adjectives. Never invent scenes, identities or dialogue; "
     "never add greetings, channel talk, rankings or calls to subscribe. Every sentence must cite the inventory "
-    "event IDs it describes and say what must be visible while it is heard. " + STYLE_GUIDE
+    "event IDs it is about; its visual_requirement field tells the editor what footage to show (that field may be "
+    "literal, the narration must not be). " + STYLE_GUIDE
 )
 SCRIPT_REVIEW_SYSTEM = (
     "You are a demanding script editor reviewing a recap script against its evidence. You did not write it. "
     "Find awkward phrasing, repetition, weak opening, gaps in cause and effect, unsupported claims, confusing "
-    "jumps, pacing problems and a weak ending, then return the improved complete script. Keep every sentence "
+    "jumps, pacing problems, a weak ending and any frame-by-frame description of the picture instead of story, "
+    "then return the improved complete script. " + NARRATION_RULE + " Keep every sentence "
     "tied to evidence event IDs; remove anything unsupported rather than softening it."
 )
 BANNED = ("subscribe", "like and share", "welcome back", "in this video", "hey guys", "let's dive",
@@ -128,6 +134,8 @@ def validate_beats(beats: list[ScriptBeat], inventory: dict, speech_pool: dict, 
                        "text": " ".join(s["text"] for s in sentences), "sentences": sentences})
     if not any(b["kind"] == "narration" for b in result):
         raise ValueError("the script has no narration")
+    if len(result) > 1 and result[0]["kind"] == "dialogue":
+        raise ValueError("a dialogue clip cannot open the Short: start with narration that sets up the situation")
     if budget_words:
         total = sum(count_words(b["text"]) for b in result if b["kind"] == "narration")
         low, high = budget_words
@@ -157,8 +165,10 @@ def write_script(client: GeminiClient, inventory: dict, story_map: dict, editori
     instructions = (
         f"Write the narration script for the approved plan in {budget_words[0]}–{budget_words[1]} narration words "
         "(dialogue clips do not count). Group sentences into beats (2–4 sentences per narration beat), and place "
-        "the approved dialogue clips as kind=dialogue beats where they land hardest. Begin with the hook event "
-        "itself. If cold_open is true, follow the hook with a clear reset (e.g. 'Hours earlier, ...'). Each sentence "
+        "the approved dialogue clips as kind=dialogue beats where they land hardest (never as the first beat). "
+        "Begin with the hook event itself. If cold_open is true, follow the hook with a clear reset (e.g. 'Hours "
+        "earlier, ...'). By the end of the first narration beat a newcomer must know who the hero is, what he did "
+        "and why he is in danger; use the story notes for that premise. Each sentence "
         "must cite event_ids and give a concrete visual_requirement (who/what action/object must be on screen). "
         "Use claim_basis story_notes only for facts present in the notes. Spell numbers as words. Do not quote "
         "dialogue in narration unless it is verified ASR text.\n\nAPPROVED PLAN:\n"
@@ -204,7 +214,8 @@ def rewrite_beat(client: GeminiClient, beat: dict, reason: str, inventory: dict,
     prompt = (f"Rewrite only narration beat {beat['id']}. Problem to fix: {reason}. "
               + (f"Keep it to {' and '.join(limits)}. " if limits else "")
               + "Keep its story contribution, cite event_ids for every sentence and give a visual_requirement. "
-              "Do not add unsupported facts.\n"
+              + NARRATION_RULE
+              + "Do not add unsupported facts.\n"
               + json.dumps({"beat": {k: beat[k] for k in ("id", "text", "sentences")},
                             "neighbouring_beats": context or [],
                             "allowed_event_ids": allowed_event_ids}, ensure_ascii=False))

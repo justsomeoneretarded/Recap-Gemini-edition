@@ -25,8 +25,8 @@ from .script import WORD, count_words, validate_beats
 from .story import evidence_parts, with_repair
 
 MIN_CLIP_SECONDS = 0.6
-MAX_CONTEXT_SHARE = 0.35
-MIN_BACKBONE_SHARE = 0.6
+MAX_CONTEXT_SHARE = 0.5
+MIN_BACKBONE_SHARE = 0.35
 
 CLIP_SYSTEM = (
     "You are a picture editor cutting clips for a movie recap. For each event, watch its candidate shots and "
@@ -35,18 +35,18 @@ CLIP_SYSTEM = (
     "what each clip shows; never describe what is not visible."
 )
 PICTURE_SYSTEM = (
-    "You are a movie recapper writing narration to picture. Each line plays over specific clips, so it must "
-    "describe what those clips show, in vivid, concrete, concise recap language, and fit their duration. Name "
-    "the key word (action or object) that the clip's anchor frame shows. No speculation, no invented names, no "
-    "channel talk."
+    "You are a movie recapper writing narration to picture. Each line plays over specific clips: it must be "
+    "true to what they show and fit their duration, but it tells the story of that moment (intent, stakes, "
+    "consequence) rather than listing what is on screen. Name the key word (action or object) that the clip's "
+    "anchor frame shows. No invented names, no channel talk. NARRATE THE STORY, NOT THE PICTURE. Each sentence says what happens in the story and why it matters: who wants what, what is at stake, what changes. Never narrate on-screen micro-actions one by one ('John picks up a book. He throws the book. The book falls.'); the footage already shows those. Instead: 'Ernest corners John between the stacks, so John grabs the only weapon in reach: a book.' Link sentences with cause and effect (so, but, because, when, until, which means). "
 )
 RECONCILE_SYSTEM = (
-    "You are the head writer merging two scripts into one gripping recap. Script A is written to picture and "
-    "fixes the timing: its action lines keep their exact clips. Script B tells the story with context, motives "
-    "and stakes. Keep A's backbone, improve its wording, and bring in B's essential context: fold it into an "
-    "action line when it fits the time, or add a short context line over an unused cover clip just before the "
-    "action it explains. Context must come from the story notes or cited story-map inferences; never invent. "
-    "Keep it action-led: context is a minority of the narration. Keep the hook first and land the ending."
+    "You are the head writer merging two scripts into one gripping recap. Script B tells the story (context, "
+    "motives, stakes) and leads the narration. Script A is written to picture and fixes the timing: its action "
+    "lines keep their exact clips, so use them where an action lands, rewritten in B's storytelling voice. Add "
+    "context lines over unused cover clips wherever the viewer needs to know who, why or what is at stake. "
+    "Context must come from the story notes or cited story-map inferences; never invent. Keep the hook first, "
+    "make the premise clear right after it, and land the ending. NARRATE THE STORY, NOT THE PICTURE. Each sentence says what happens in the story and why it matters: who wants what, what is at stake, what changes. Never narrate on-screen micro-actions one by one ('John picks up a book. He throws the book. The book falls.'); the footage already shows those. Instead: 'Ernest corners John between the stacks, so John grabs the only weapon in reach: a book.' Link sentences with cause and effect (so, but, because, when, until, which means). "
 )
 
 

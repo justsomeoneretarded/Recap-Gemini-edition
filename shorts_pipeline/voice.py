@@ -253,7 +253,15 @@ class _Synthesizer:
         self.sf.write(str(path),self.np.concatenate(pieces),self.engine.sr,subtype="PCM_16")
 
 
-def synthesize_plan(plan: dict, narrator: str, workdir: Path, model: str = "original") -> dict:
+def _speed_up(audio: Path, speed: float) -> None:
+    """Narration tempo (e.g. 1.2x like recap channels) without changing pitch; done before timing is measured."""
+    faster = audio.with_name(audio.stem + "-tempo.wav")
+    _run(["ffmpeg", "-y", "-v", "error", "-threads", "1", "-i", str(audio), "-filter:a", f"atempo={speed:.4f}",
+          str(faster)])
+    faster.replace(audio)
+
+
+def synthesize_plan(plan: dict, narrator: str, workdir: Path, model: str = "original", speed: float = 1.0) -> dict:
     if narrator not in VOICES or model not in MODELS:
         raise ValueError("Choose Warguy, Kit Laser or Female and original, turbo or nano.")
     result=copy.deepcopy(plan)
@@ -303,7 +311,10 @@ def synthesize_plan(plan: dict, narrator: str, workdir: Path, model: str = "orig
             continue
         if reference is None:
             reference=voice_reference(narrator)
-        fingerprint=hashlib.sha256(json.dumps([VERSION,text,narrator,model,beat.get("delivery","normal"),hashlib.sha256(reference.read_bytes()).hexdigest()],ensure_ascii=False).encode()).hexdigest()
+        identity=[VERSION,text,narrator,model,beat.get("delivery","normal"),hashlib.sha256(reference.read_bytes()).hexdigest()]
+        if abs(speed-1.0)>1e-3:
+            identity.append(round(speed,4))  # Normal-speed takes keep their existing cache entries.
+        fingerprint=hashlib.sha256(json.dumps(identity,ensure_ascii=False).encode()).hexdigest()
         audio=cache/f"{fingerprint}.wav"
         metadata=cache/f"{fingerprint}.json"
         if audio.exists() and metadata.exists():
@@ -320,6 +331,9 @@ def synthesize_plan(plan: dict, narrator: str, workdir: Path, model: str = "orig
                 stage="generation"
                 try:
                     engine.generate(text,audio,beat.get("delivery","normal"),int(fingerprint[:8],16)+attempt*101)
+                    if abs(speed-1.0)>1e-3:
+                        stage="tempo"
+                        _speed_up(audio,speed)
                     stage="duration"
                     duration=_duration(audio)
                     stage="transcription"

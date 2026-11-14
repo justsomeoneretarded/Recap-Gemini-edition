@@ -489,9 +489,9 @@ def test_merge_keeps_action_clips_and_limits_context():
              ((action1, dict(context, clip_ids=["K001"]), action2), "unused cover clips"),
              ((action1, dict(context, basis="story_notes"), action2), "no"),
              ((action1, dict(context, event_ids=["EV0001"]), action2), "inferred_context without"),
-             ((action1,), "backbone"),
+             ((context,), "backbone"),  # Script A must still carry at least 35% of the lines.
              ((dict(action1, text="He lifts the rifle."), dict(action2, text="Then he aims."),
-               dict(context, text="The old truck waits outside the barn tonight.")), "action-led")]
+               dict(context, text="The old truck still waits outside the barn tonight for him.")), "action-led")]
     for lines, message in cases:
         with pytest.raises(ValueError, match=message):
             validate_reconciled(merged(*lines), **kwargs)
@@ -819,7 +819,7 @@ def test_one_stalled_request_cannot_hold_the_run(tmp_path, monkeypatch):
 
     class Slow(Scripted):
         def generate(self, model, parts, **kwargs):
-            clock[0] += 400.0  # Each attempt times out after a long wait.
+            clock[0] += 200.0  # Each attempt times out after a long wait.
             return super().generate(model, parts, **kwargs)
 
     deadline = FakeAPIError("timeout", "504 DEADLINE_EXCEEDED")
@@ -864,3 +864,20 @@ def test_shot_encode_bounds_the_source_audio_and_media_commands_time_out(monkeyp
     monkeypatch.setattr(render.subprocess, "run", stuck)
     with pytest.raises(RuntimeError, match="did not finish"):
         render._run(["ffmpeg", "-i", "x"])
+
+
+def test_frame_by_frame_narration_is_flagged_and_story_narration_is_not():
+    # Run 18 narrated the picture ("John picks up a book. He throws the book...") instead of the story.
+    from shorts_pipeline.gemini.review import play_by_play
+
+    assert play_by_play(["John picks up a book.", "He throws the book.", "The book falls."])
+    assert not play_by_play(["Ernest corners John between the stacks, so John grabs the only weapon in reach.",
+                             "He swings the book until the giant finally drops.", "John walks on."])
+    assert not play_by_play(["A bounty goes live.", "Fourteen million dollars.",
+                             "Every killer in New York is watching, so John runs."])
+
+
+def test_a_dialogue_clip_cannot_open_the_short():
+    beats = [_beat("", kind="dialogue", speech="D1"), _beat("He pries the crate open with both hands.")]
+    with pytest.raises(ValueError, match="cannot open the Short"):
+        validate_beats(beats, INVENTORY, POOL, allowed_quotes=["D1"], budget_words=None)
