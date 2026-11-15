@@ -193,3 +193,44 @@ def test_a_corner_logo_or_end_screen_does_not_reject_an_official_clip():
     assert not discovery.usable(screening(False, ["watermark", "narration over the film"]))
     assert not discovery.usable(screening(False, []))
     assert not discovery.usable(screening(True, [], same=False))
+
+
+def test_subtitled_footage_is_a_cropped_last_resort_for_an_uncovered_moment(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key-123456")
+    master = make_source(tmp_path / "master.mp4", 40)
+    downloads = []
+
+    class Subtitled(Transport):
+        def generate(self, model, parts, *, system, schema, **config):
+            url = next((p["youtube_url"] for p in parts if "youtube_url" in p), "")
+            if schema.__name__ == "Screening" and url.endswith("clubS"):
+                self.calls.append((schema.__name__, parts))
+                return self._ok({"same_film": True, "clean": False, "problems": ["burned_in_subtitles"], "segments": [
+                    {"item_id": "I3", "start": 4, "end": 16, "shows": "club fight", "confidence": 0.8}]})
+            if schema.__name__ == "RefinedSegments" and url.endswith("clubS"):
+                return self._ok({"segments": []})
+            return super().generate(model, parts, system=system, schema=schema, **config)
+
+    def subtitled_search(query, limit=8):
+        if query == "john wick club fight":
+            return [{"video_id": "clubS", "title": "John Wick - Club Fight", "channel": "Clips", "duration": 30,
+                     "views": 10, "url": "https://www.youtube.com/watch?v=clubS"}]
+        return search(query, limit)
+
+    def download(url, start, end, target):
+        downloads.append(url.rsplit("=", 1)[1])
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", str(start), "-to", str(end), "-i", str(master),
+                        "-c:v", "libx264", "-c:a", "aac", str(target)], check=True)
+        return target
+
+    discovery.discover_footage(request(), tmp_path / "work", tmp_path / "out", transport=Subtitled(),
+                               search=subtitled_search, download=download, log=lambda *_: None, sleep=lambda s: None)
+    report = json.loads((tmp_path / "out" / "discovery-report.json").read_text())
+    club = [c for c in report["chosen"] if c["video_id"] == "clubS"]
+    # Only the moment with no clean footage takes the subtitled upload, normalized above the subtitles.
+    assert club and all(c["item_id"] == "I3" and c["subtitled"] and c["file"].endswith("-sub.mp4") for c in club)
+    assert not any(c["subtitled"] for c in report["chosen"] if c["video_id"] != "clubS")
+    assert {c["item_id"]: c["seconds"] for c in report["coverage"]}["I3"] > 0
+    assert discovery.subtitled_only(discovery.Screening(same_film=True, clean=False, problems=["burned_in_subtitles"]))
+    assert not discovery.subtitled_only(discovery.Screening(same_film=True, clean=False,
+                                                            problems=["burned-in subtitles", "narration over the film"]))

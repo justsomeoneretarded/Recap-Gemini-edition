@@ -73,19 +73,21 @@ def budget(parts) -> tuple[int, int]:
 
 def rewrite(parts):
     text = parts[0]["text"]
+    footage = re.search(r'"footage": \[\[([\d.]+), ([\d.]+)\]', text)
+    at = float(footage.group(1)) + 1 if footage else None
     most = re.search(r"at most (\d+) words", text)
     least = re.search(r"at least (\d+) words", text)
     n = int(most.group(1)) if most else (int(least.group(1)) + 2 if least else 16)
     if least and not most:
         n = int(least.group(1)) + 2
     if n < 14:
-        return {"sentences": [{"text": line(max(6, n), 7), "at": None, "key_word": ""}], "rationale": "fit"}
+        return {"sentences": [{"text": line(max(6, n), 7), "at": at, "key_word": ""}], "rationale": "fit"}
     first = max(6, n // 2)
-    return {"sentences": [{"text": line(first, 7), "at": None, "key_word": ""},
+    return {"sentences": [{"text": line(first, 7), "at": at, "key_word": ""},
                           {"text": line(max(6, n - first), 11), "at": None, "key_word": ""}], "rationale": "fit"}
 
 
-def transport(critique_score=5, contradictions=None):
+def transport(critique_score=5, contradictions=None, beat_notes=None):
     def write(parts):
         low, high = budget(parts)
         return script_for((low + high) // 2)
@@ -98,7 +100,8 @@ def transport(critique_score=5, contradictions=None):
                                   "visible_action": e["visible_action"], "focus_x": 0.3, "kind": "action",
                                   "importance": 4, "confidence": 0.9} for e in EVENTS],
                          overrides={"StorylineScript": write, "BeatText": rewrite, "VisualCheck": check,
-                                    "StoryCritique": {**scores, "problems": ["weak hook"], "rewrite_notes": "sharpen"}})
+                                    "StoryCritique": {**scores, "problems": ["weak hook"], "rewrite_notes": "sharpen",
+                                                      "beat_notes": beat_notes or []}})
 
 
 def context(**extra) -> Context:
@@ -307,3 +310,34 @@ def test_only_clean_short_film_lines_are_offered_as_dialogue():
     data["beats"].insert(3, {"kind": "dialogue", "item_id": "I2", "speech_id": "D2", "sentences": []})
     beats = validate_script(ctx, StorylineScript.model_validate(data))
     assert [b["speech_id"] for b in beats if b["kind"] == "dialogue"] == ["D2"]
+
+
+def test_a_beat_must_narrate_its_own_footage():
+    ctx = context()
+    low, high = ctx.budget
+    data = script_for((low + high) // 2)
+    for sentence in data["beats"][2]["sentences"]:  # The library beat talks about something else entirely.
+        sentence["at"] = None
+    with pytest.raises(ValueError, match="none of its sentences narrates that moment"):
+        validate_script(ctx, StorylineScript.model_validate(data))
+    # The premise beat may tell backstory over its footage.
+    data = script_for((low + high) // 2)
+    assert all(s["at"] is None for s in data["beats"][1]["sentences"])
+    validate_script(ctx, StorylineScript.model_validate(data))
+
+
+def test_editor_beat_notes_fix_factual_errors_even_in_a_strong_script(discovered):
+    fake = transport(beat_notes=[{"beat_id": "N03", "note": "Sofia leads him to Berrada, not the Elder",
+                                  "factual_error": True},
+                                 {"beat_id": "N04", "note": "could be punchier", "factual_error": False},
+                                 {"beat_id": "N99", "note": "unknown beat", "factual_error": True}])
+    out = discovered / "out"
+    generate(_request(), discovered / "work", out, gemini_transport=fake, synthesize=FakeSynth(3.0))
+    history = json.loads((out / "correction-history.json").read_text())
+    fixes = [h for h in history if h["action"] == "editor_beat_fix"]
+    # Scores are all 5: only the factual error is fixed, the style note and the unknown beat are not.
+    assert [(h["beat_id"], h["outcome"]) for h in fixes] == [("N03", "rewritten")]
+    rewrites = [c for c in fake.calls if c["schema"] == "BeatText"]
+    assert "Berrada" in rewrites[0]["parts"][0]["text"]
+    critiques = json.loads((out / "story-critique.json").read_text())
+    assert critiques[-1]["after_beat_fixes"] == ["N03"]

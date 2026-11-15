@@ -109,3 +109,10 @@ Offline tests (`tests/test_gemini_storyline.py`) check:
 
 Not yet verified live: the quality of Gemini's story script, critique and visual check on a real run.
 
+Added after run 20 (86 s, no deleted lines, but no cold open and some beats off their footage):
+- subtitled uploads are used only as a cropped last resort for a moment with no clean footage;
+- a beat other than the premise must narrate its own item's moment;
+- the editor's beat notes trigger targeted rewrites, factual errors first.
+
+Each has an offline test.
+

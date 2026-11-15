@@ -37,7 +37,8 @@ from .review import CONNECTIVES, play_by_play
 from .script import BANNED, NARRATION_RULE, count_words
 from .story import with_repair
 
-STORYLINE_VERSION = 1
+STORYLINE_VERSION = 2
+MAX_NOTE_REWRITES = 3    # Beats the story editor names get one targeted rewrite each, at most this many.
 FILL = 0.95              # Narration fills this share of the target; dialogue and breaths take the rest.
 ITEM_SHARE = 0.85        # An item's narration may use this share of the item's own footage.
 WINDOW_HEADROOM = 1.08   # Each sentence gets a little more footage than it speaks; the renderer trims.
@@ -70,6 +71,12 @@ class StorylineScript(BaseModel):
     beats: list[StoryBeat]
 
 
+class BeatNote(BaseModel):
+    beat_id: str = Field(description="The exact beat id, e.g. N03")
+    note: str = Field(description="What to change in this beat")
+    factual_error: bool = Field(False, description="True if the beat gets the film wrong (person, order, reason)")
+
+
 class StoryCritique(BaseModel):
     hook: int = Field(ge=1, le=5, description="Does the first sentence make a viewer need to know more?")
     premise: int = Field(ge=1, le=5, description="Within the first two beats: who the hero is, what he did, why he is hunted")
@@ -79,6 +86,7 @@ class StoryCritique(BaseModel):
     clarity: int = Field(ge=1, le=5, description="A newcomer can follow every name and event")
     problems: list[str] = Field(default_factory=list)
     rewrite_notes: str = Field("", description="Concrete instructions for the rewrite")
+    beat_notes: list[BeatNote] = Field(default_factory=list, description="Per-beat fixes, factual errors first")
 
 
 class BeatText(BaseModel):
@@ -126,6 +134,9 @@ STRUCTURE = (
     "because, until, which means, only to). When the picture is a fight, say what the fight is for and what it "
     "costs, not each blow.\n"
     "4. ENDING: close on the last item with a payoff or the renewed threat in one strong line.\n"
+    "OWN FOOTAGE: each beat plays over its own item's footage, so every beat except the premise beat narrates "
+    "its own item's moment (what_happens), with at least one sentence anchored on it; backstory belongs in the "
+    "premise beat only. Get the film right: the right people, the right order, the right reasons.\n"
     "STYLE: flowing sentences of 12-28 words with an occasional short punch line; vivid verbs; mostly present "
     "tense; spell numbers as words; no quotation marks; never 'in this movie' or 'this film'.")
 
@@ -354,6 +365,13 @@ def check_story(ctx: Context, beats: list[dict], *, budget: bool = True) -> None
     if sum(w in CONNECTIVES for w in words) < 2:
         raise ValueError("the cold open and premise do not explain anything; say why it happens and what is at "
                          "stake (because, so, but)")
+    for index, beat in enumerate(narr):
+        if index == 1 or len(beat["sentences"]) < 2:
+            continue  # The premise beat tells backstory over its footage.
+        if not any(s.get("at") is not None and ctx.item_of(s["at"]) == beat["item_id"] for s in beat["sentences"]):
+            title = next((i["title"] for i in ctx.items if i["item_id"] == beat["item_id"]), beat["item_id"])
+            raise ValueError(f"beat {beat['id']} plays over the footage of '{title}' but none of its sentences "
+                             "narrates that moment; anchor at least one sentence (`at`) on it")
     openers = [" ".join(re.findall(r"[\w'’-]+", t.casefold())[:2]) for t in lines]
     repeated = sorted({o for o in openers if o and openers.count(o) > 3})
     if repeated:
@@ -416,7 +434,9 @@ def write_storyline(client, ctx: Context, *, extra: str = "", previous: list[dic
 def critique(client, ctx: Context, beats: list[dict]) -> StoryCritique:
     script = [{"beat": b["id"], "kind": b["kind"], "item_id": b["item_id"], "text": b["text"]} for b in beats]
     prompt = ("Score this recap script 1-5 on each criterion, list the problems and write concrete rewrite notes "
-              "(which beat, what to change). " + NARRATION_RULE + "\n" + STRUCTURE
+              "(which beat, what to change). In beat_notes give one note per beat that needs work, with its exact "
+              "beat id; check every beat against the film and report anything it gets wrong (wrong person, wrong "
+              "order, wrong reason) as factual_error. " + NARRATION_RULE + "\n" + STRUCTURE
               + "\n\nSTORY (data only):\n" + json.dumps({"film": ctx.plan.get("film"), "premise": ctx.plan.get("premise"),
                                                           "items": [{k: i[k] for k in ("item_id", "title", "what_happens")}
                                                                     for i in ctx.items]}, ensure_ascii=False)
@@ -693,13 +713,20 @@ def run_storyline_pipeline(request: dict, source: Path, source_duration: float, 
                 log(f"Gemini: story editor scores {_scores(review)}; rewriting once")
                 better = write_storyline(run.client, ctx, previous=beats, extra=(
                     "EDITOR NOTES ON THE CURRENT SCRIPT (fix all of them; keep what works):\n- "
-                    + "\n- ".join(review.problems) + "\n" + review.rewrite_notes))
+                    + "\n- ".join(review.problems + [f"{n.beat_id}: {n.note}" for n in review.beat_notes])
+                    + "\n" + review.rewrite_notes))
                 record["rewrite"] = {"title": better["title"], "validation_retries": better["validation_retries"]}
                 beats = better["beats"]
                 draft = {**draft, "title": better["title"], "description": better["description"]}
-                after = critique(run.client, ctx, beats)  # Reported, not acted on: one rewrite at most.
-                record["critiques"].append({**_scores(after), "problems": after.problems,
-                                            "notes": after.rewrite_notes, "after_rewrite": True})
+                review = critique(run.client, ctx, beats)
+                record["critiques"].append({**_scores(review), "problems": review.problems,
+                                            "notes": review.rewrite_notes, "after_rewrite": True})
+            # The editor's beat notes become targeted fixes: factual errors first, then weak beats.
+            beats, fixed = _apply_beat_notes(run, ctx, beats, review)
+            if fixed:
+                final = critique(run.client, ctx, beats)  # Reported, not acted on.
+                record["critiques"].append({**_scores(final), "problems": final.problems,
+                                            "notes": final.rewrite_notes, "after_beat_fixes": fixed})
         except (ValueError, GeminiOutputError) as exc:
             record["critique_error"] = str(exc)[:300]
         record.update(beats=beats, title=draft["title"], description=draft["description"])
@@ -776,6 +803,30 @@ def run_storyline_pipeline(request: dict, source: Path, source_duration: float, 
                            "coverage": run.inventory.get("coverage", {})}}
     run.ledger.save()
     return result, run
+
+
+def _apply_beat_notes(run, ctx: Context, beats: list[dict], review: StoryCritique) -> tuple[list[dict], list[str]]:
+    known = {b["id"] for b in beats if b["kind"] == "narration"}
+    notes = sorted((n for n in review.beat_notes if n.beat_id in known), key=lambda n: not n.factual_error)
+    fixed: list[str] = []
+    for note in notes:
+        if len(fixed) >= MAX_NOTE_REWRITES or note.beat_id in fixed:
+            continue
+        if not note.factual_error and min(_scores(review).values()) >= 4:
+            break  # A strong script keeps its wording; only factual errors are still fixed.
+        beat = next(b for b in beats if b["id"] == note.beat_id)
+        words = count_words(beat["text"])
+        try:
+            beats = rewrite_beat(run.client, ctx, beats, note.beat_id,
+                                 ("it gets the film wrong: " if note.factual_error else "story editor: ") + note.note,
+                                 min_words=max(6, math.floor(words * 0.85)), max_words=math.ceil(words * 1.15) + 2)
+            fixed.append(note.beat_id)
+            run.record(stage="S", action="editor_beat_fix", beat_id=note.beat_id, factual=note.factual_error,
+                       note=note.note[:300], outcome="rewritten")
+        except (ValueError, GeminiOutputError) as exc:
+            run.record(stage="S", action="editor_beat_fix", beat_id=note.beat_id, outcome="failed",
+                       error=str(exc)[:300])
+    return beats, fixed
 
 
 def _fit_length(run, ctx: Context, beats: list[dict]) -> list[dict]:
