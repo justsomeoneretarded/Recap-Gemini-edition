@@ -226,3 +226,19 @@ def test_workflow_pace_option_sets_narration_speed():
     sys.path.insert(0, "scripts")
     from workflow_request import parse_options
     assert parse_options("pace=1.1") == {"narration_speed": 1.1}
+
+
+def test_loose_matching_accepts_run22_mishearing_but_never_a_skipped_word():
+    """Run 22, beat N06: the speech was complete; Whisper heard 'attack dogs maul' as 'the tech dogs, more'."""
+    text=('Traveling to Morocco, John joins Sofia to battle through a guarded compound so they can locate contacts. '
+          'Fierce attack dogs maul tactical guards because lethal force is absolutely required.')
+    heard=text.replace('attack dogs maul','the tech dogs, more').split()
+    recognized=[{'word':w,'start':i*.28,'end':i*.28+.24} for i,w in enumerate(heard)]
+    with pytest.raises(ValueError,match='word counts differ'):
+        _align_script(text,recognized,len(heard)*.28)
+    aligned=_align_script(text,recognized,len(heard)*.28,loose=True)
+    assert [w['word'] for w in aligned]==text.split()
+    skipped=text.replace('tactical ','').split()
+    recognized=[{'word':w,'start':i*.28,'end':i*.28+.24} for i,w in enumerate(skipped)]
+    with pytest.raises(ValueError,match='could not find script words'):
+        _align_script(text,recognized,len(skipped)*.28,loose=True)

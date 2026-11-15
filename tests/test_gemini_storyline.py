@@ -37,14 +37,15 @@ def labelled_catalog() -> dict:
 
 
 SHOTS = labelled_catalog()
-WORDS = ("because the bounty keeps growing every killer in the city now wants the reward and the clock "
+WORDS = ("since the bounty keeps growing every killer in the city now wants the reward and the clock "
          "never stops while he runs so nobody can save him before the hour ends").split()
 OPENERS = ["John", "Winston", "Every", "Hours", "Nobody", "Now", "Then", "Blood", "Tonight", "Only", "Still", "Soon",
            "Desperate", "Bleeding", "Cornered", "Trapped"]
 
 
 def line(n: int, number: int) -> str:
-    body = [OPENERS[number % len(OPENERS)], "Wick" if number % 3 == 0 else "moves", "because"]
+    link = ("so", "but", "until", "when", "because")[number % 5]
+    body = [OPENERS[number % len(OPENERS)], "Wick" if number % 3 == 0 else "moves", link]
     body += [WORDS[(i + number) % len(WORDS)] for i in range(max(1, n - 2))]
     return " ".join(body[:n - 1] + ["tonight"]) + "."
 
@@ -388,3 +389,46 @@ def test_placement_never_loops_or_fails_when_footage_runs_out():
     total = sum(x["end"] - x["start"] for x in placed)
     assert abs(total - 14.3337) < 0.06 and all(x["end"] - x["start"] <= HARD_MAX + 1e-6 for x in placed)
     assert any("repeated" in n for n in notes)  # Reported, not hidden.
+
+
+class HardToHear(FakeSynth):
+    """Fails speech verification for one beat until it is rewritten (or, if stubborn, until it is loose)."""
+
+    def __init__(self, beat_id, stubborn=False):
+        super().__init__(3.0)
+        self.beat_id, self.stubborn, self.failures = beat_id, stubborn, 0
+
+    def __call__(self, plan, narrator, workdir, model="original", speed=1.0):
+        for beat in plan["beats"]:
+            if beat["id"] == self.beat_id and not beat.get("loose") and (self.stubborn or not beat.get("speech_rewritten")):
+                self.failures += 1
+                raise RuntimeError(f"Narration beat {beat['id']} failed complete-speech verification: "
+                                   "ASR word counts differ; retry speech or provide reviewed word timings.")
+        return super().__call__(plan, narrator, workdir, model, speed)
+
+
+@pytest.mark.parametrize("stubborn", [False, True])
+def test_a_line_the_voice_check_cannot_hear_is_rewritten_then_matched_loosely_never_fatal(discovered, stubborn):
+    """Run 22 died on 'Fierce attack dogs maul' (heard 'Fierce the tech dogs, more')."""
+    fake = transport()
+    out = discovered / "out"
+    synth = HardToHear("N02", stubborn=stubborn)
+    result = generate(_request(), discovered / "work", out, gemini_transport=fake, synthesize=synth)
+    assert Path(result["final"]).is_file()
+    history = json.loads((out / "correction-history.json").read_text())
+    rewrites = [h for h in history if h["action"] == "speech_rewrite"]
+    assert len(rewrites) == 1 and rewrites[0]["beat_id"] == "N02" and rewrites[0]["outcome"] == "rewritten"
+    assert any("could not say this line" in c["parts"][0]["text"] for c in fake.calls if c["schema"] == "BeatText")
+    loose = [h for h in history if h["action"] == "speech_loose_match"]
+    assert len(loose) == (1 if stubborn else 0) and synth.failures == (2 if stubborn else 1)
+    assert not any("remove" in h.get("action", "") for h in history)
+
+
+def test_generic_tacked_on_reasons_are_slop():
+    from shorts_pipeline.gemini.shots import slop
+    run22 = ["John clashes with armed mercenaries because escape is blocked.",
+             "Fierce attack dogs maul tactical guards because lethal force is absolutely required."]
+    assert any("tacked-on" in f for f in slop(run22))
+    many = [f"John runs to the car because the man {n} called." for n in range(5)] + ["He drives."] * 5
+    assert any("'because' in" in f for f in slop(many))
+    assert not slop(["Ernest corners John between the stacks, so John grabs the only weapon in reach: a book."])
