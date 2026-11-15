@@ -376,3 +376,15 @@ def test_editor_beat_notes_fix_factual_errors_even_in_a_strong_script(discovered
     assert "Berrada" in rewrites[0]["parts"][0]["text"]
     critiques = json.loads((out / "story-critique.json").read_text())
     assert critiques[-1]["after_beat_fixes"] == ["N03"]
+
+
+def test_placement_never_loops_or_fails_when_footage_runs_out():
+    """Run 21: a rounding sliver made the fill loop forever (CI) or fail with 'pool exhausted'."""
+    from shorts_pipeline.gemini.shots import HARD_MAX, Footage, place_sentence
+    shots = {k: dict(v) for k, v in SHOTS.items() if v["item_id"] == "I2"}
+    footage = Footage(shots, ["I2"])
+    # Odd cue times that leave sub-millisecond slivers, and far more speech than footage.
+    placed, notes = place_sentence(footage, "I2", ["I2-001", "I2-002"], [0.0, 2.2004], 14.3337, 0, "N01.1")
+    total = sum(x["end"] - x["start"] for x in placed)
+    assert abs(total - 14.3337) < 0.06 and all(x["end"] - x["start"] <= HARD_MAX + 1e-6 for x in placed)
+    assert any("repeated" in n for n in notes)  # Reported, not hidden.
