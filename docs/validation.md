@@ -116,3 +116,12 @@ Added after run 20 (86 s, no deleted lines, but no cold open and some beats off 
 
 Each has an offline test.
 
+Added after the user's review of run 20: in run 20, one continuous window per sentence (median 4.2 s, one stretch with no cut for 17 s) put filler on screen and let the words drift from the picture. Discovered footage is now cut at the shot level (`gemini/shots.py`):
+- a labelled shot catalog;
+- shots cited per sentence, with word cues;
+- at most 2.2 s per cut;
+- filler excluded;
+- an AI-slop check.
+
+Offline tests cover cue timing, cut length, no reuse of footage, filler exclusion and own-item shots.
+

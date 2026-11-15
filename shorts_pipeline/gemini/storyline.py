@@ -4,15 +4,18 @@ Discovery already knows the story: a premise, story items in film order (what ha
 why it matters) and, for each item, the exact stretches of the footage pool that show it.
 This path keeps that structure instead of re-deriving it from anonymous footage:
 
-1. Moment log: Stage A (analysis.py) timestamps what is visible in the pool.
+1. Shot catalog (shots.py): every detected shot of the pool is labelled by Gemini: what is
+   visible, intensity, filler or not.
 2. Story script: one writer call narrates the items as a story (cold open, premise,
    cause-and-effect chain, ending), with style examples from the reference recaps and a
    per-item word budget that the item's own footage can carry.
 3. Story editor: an independent critique scores the script; a weak script is rewritten once.
 4. Measured narration: the voice is synthesized at the requested pace; an overlong or
    short Short is fixed by rewriting whole beats, never by deleting sentences.
-5. Placement: each sentence plays over a continuous window of its own item's footage,
-   in order, with the moment it narrates landing on its key word.
+5. Placement: each sentence cites the shots that show what it says; each cuts in on the
+   words it illustrates and stays at most 2.2 s, gaps filled with the item's next best
+   shots, so the picture changes every 1.5-2 s like the reference recaps (run 20 held one
+   continuous window per sentence: filler on screen, a 17 s stretch with no cut).
 6. Visual check: Gemini watches the placed windows and flags contradictions only (a wrong
    person named, a different event on screen); the affected beat is rewritten once.
 
@@ -35,14 +38,13 @@ from ..planner import _DANGLING_SENTENCE_ENDINGS
 from .client import GeminiOutputError, _write_json, text_part, video_part
 from .review import CONNECTIVES, play_by_play
 from .script import BANNED, NARRATION_RULE, count_words
+from .shots import MAX_CUT, Footage, catalog_shots, cue_times, label_shots, place_sentence, slop
 from .story import with_repair
 
-STORYLINE_VERSION = 2
+STORYLINE_VERSION = 3
 MAX_NOTE_REWRITES = 3    # Beats the story editor names get one targeted rewrite each, at most this many.
 FILL = 0.95              # Narration fills this share of the target; dialogue and breaths take the rest.
 ITEM_SHARE = 0.85        # An item's narration may use this share of the item's own footage.
-WINDOW_HEADROOM = 1.08   # Each sentence gets a little more footage than it speaks; the renderer trims.
-MIN_PIECE = 0.6          # Shorter leftovers are skipped: they would flash on screen.
 NARRATION_SOURCE_GAIN = 0.07  # Film sound (hits, gunshots) stays audible under the voice.
 MAX_DIALOGUE = 2
 REFERENCE_DIR = Path(__file__).resolve().parents[2] / "docs" / "reference-data" / "transcripts"
@@ -51,11 +53,15 @@ GENERIC = frozenset("chapter part movie film the and with from into that this fr
 
 
 # ------------------------------------------------------------------ schemas
+class ShotCue(BaseModel):
+    shot_id: str = Field(description="A shot id from the item's shot list")
+    cue: str = Field("", description="The exact words of this sentence that this shot illustrates")
+
+
 class StorySentence(BaseModel):
     text: str = Field(description="One complete narration sentence")
-    at: float | None = Field(None, description="Pool second where the moment this sentence narrates is visible; "
-                                               "must be inside its item's footage; null for a backstory/motive line")
-    key_word: str = Field("", description="One word of this sentence that should land on that moment")
+    shots: list[ShotCue] = Field(default_factory=list, description="The shots that show what this sentence says, in "
+                                                                   "order, about one per 2 seconds of speech")
 
 
 class StoryBeat(BaseModel):
@@ -84,6 +90,8 @@ class StoryCritique(BaseModel):
     storytelling: int = Field(ge=1, le=5, description="Story meaning (intent, stakes, consequence), not a description of frames")
     ending: int = Field(ge=1, le=5, description="A payoff or renewed threat that lands")
     clarity: int = Field(ge=1, le=5, description="A newcomer can follow every name and event")
+    impact: int = Field(3, ge=1, le=5, description="Concrete, vivid, specific words; no stock phrases or generic "
+                                                   "adjectives (AI-sounding narration scores 1-2)")
     problems: list[str] = Field(default_factory=list)
     rewrite_notes: str = Field("", description="Concrete instructions for the rewrite")
     beat_notes: list[BeatNote] = Field(default_factory=list, description="Per-beat fixes, factual errors first")
@@ -134,11 +142,16 @@ STRUCTURE = (
     "because, until, which means, only to). When the picture is a fight, say what the fight is for and what it "
     "costs, not each blow.\n"
     "4. ENDING: close on the last item with a payoff or the renewed threat in one strong line.\n"
-    "OWN FOOTAGE: each beat plays over its own item's footage, so every beat except the premise beat narrates "
-    "its own item's moment (what_happens), with at least one sentence anchored on it; backstory belongs in the "
-    "premise beat only. Get the film right: the right people, the right order, the right reasons.\n"
-    "STYLE: flowing sentences of 12-28 words with an occasional short punch line; vivid verbs; mostly present "
-    "tense; spell numbers as words; no quotation marks; never 'in this movie' or 'this film'.")
+    "OWN FOOTAGE: each beat plays over its own item's shots, so every beat except the premise beat narrates its "
+    "own item's moment (what_happens); backstory belongs in the premise beat only. Get the film right: the right "
+    "people, the right order, the right reasons.\n"
+    "HIGH IMPACT, NO AI SLOP: every sentence names who does what to whom, with concrete nouns and verbs a viewer "
+    "can see in the shots, plus the reason or the cost. No stock phrases ('little did he know', 'all hell breaks "
+    "loose', 'a deadly game', 'the clock is ticking', 'all-out war', 'unleash'), no piles of adjectives (deadly, "
+    "brutal, ruthless, relentless, epic, intense). Specific beats generic: 'a pencil through the hand' beats 'a "
+    "brutal fight'.\n"
+    "STYLE: sentences of 10-24 words with an occasional short punch line; vivid verbs; mostly present tense; spell "
+    "numbers as words; no quotation marks; never 'in this movie' or 'this film'.")
 
 
 # ------------------------------------------------------------------ inputs
@@ -202,13 +215,15 @@ def _protagonist_names(premise: str, notes: str) -> set[str]:
 class Context:
     """Everything the writer, editor and validators need, built once per run."""
 
-    def __init__(self, plan: dict, pool_map: list[dict], inventory: dict, speech_pool: dict, request: dict,
+    def __init__(self, plan: dict, pool_map: list[dict], shots: dict[str, dict], speech_pool: dict, request: dict,
                  rate: float, target: float):
         self.plan, self.request, self.rate, self.target = plan, request, rate, target
         self.ranges = item_ranges(pool_map)
-        self.items = [i for i in plan["items"] if i["item_id"] in self.ranges]
-        self.footage = {k: sum(b - a for a, b in v) for k, v in self.ranges.items()}
-        self.events = sorted(inventory.get("events", []), key=lambda e: e["start"])
+        self.shots = shots
+        # Footage a viewer should see: shots that are not filler.
+        self.footage = {k: sum(s["end"] - s["start"] for s in shots.values() if s["item_id"] == k and not s["filler"])
+                        for k in self.ranges}
+        self.items = [i for i in plan["items"] if self.footage.get(i["item_id"], 0) >= 2.0]
         self.speech_pool = speech_pool
         notes = request.get("user_story_notes", request.get("story_notes", ""))
         self.notes = notes
@@ -225,12 +240,12 @@ class Context:
                 return item
         return None
 
-    def moments(self, item_id: str) -> list[dict]:
-        spans = self.ranges[item_id]
-        found = [{"at": round(float(e.get("peak", (e["start"] + e["end"]) / 2)), 1),
-                  "from": round(e["start"], 1), "to": round(e["end"], 1), "visible": e["visible_action"]}
-                 for e in self.events if any(e["start"] < b and e["end"] > a for a, b in spans)]
-        return found
+    def shot_list(self, item_id: str) -> list[dict]:
+        """The item's showable shots, in film order, for the writer."""
+        return [{"id": sid, "seconds": round(s["end"] - s["start"], 1), "visible": s["visible"],
+                 "intensity": s["intensity"]}
+                for sid, s in sorted(self.shots.items(), key=lambda kv: kv[1]["start"])
+                if s["item_id"] == item_id and not s["filler"]]
 
     def dialogue_clips(self) -> list[dict]:
         clips = []
@@ -251,22 +266,23 @@ class Context:
             "story_items_in_film_order": [
                 {"item_id": i["item_id"], "title": i["title"], "what_happens": i["what_happens"],
                  "why_it_matters": i.get("story_context", ""),
-                 "footage": [[round(a, 1), round(b, 1)] for a, b in self.ranges[i["item_id"]]],
                  "footage_seconds": round(self.footage[i["item_id"]], 1),
                  "max_narration_words": self.item_max[i["item_id"]],
-                 "visible_moments": self.moments(i["item_id"])} for i in self.items],
+                 "shots": self.shot_list(i["item_id"])} for i in self.items],
             "dialogue_clips": self.dialogue_clips()}
 
     def prompt(self, extra: str = "") -> list[dict]:
         examples = "".join(f"\nEXAMPLE {n} (other film, style only, never copy wording):\n{t}\n"
                            for n, t in enumerate(self.examples, 1))
-        text = (STRUCTURE + "\n\nFOOTAGE FIT: each beat plays over its item's footage. Keep each item's narration "
-                "(all beats with that item_id together) within its max_narration_words. A hook beat may use a later "
-                "item's footage; that item's later beat then uses the rest of it. For every sentence give `at`, the "
-                "pool second (from visible_moments) of the moment it narrates, and the key_word that should land on "
-                "it; use null for a backstory or motive line, which plays over the item's footage. Group 2-4 "
-                "sentences per narration beat. You may add up to two kind=dialogue beats from dialogue_clips "
-                "(speech_id and its item_id) where a line lands hard, a threat or a reversal, never first.\n"
+        text = (STRUCTURE + "\n\nPICTURE: the edit cuts every 1.5-2 seconds, and every cut must show what the "
+                "words say at that moment. For every sentence list `shots`: the shot ids from its item's shot list "
+                "that show it, in order, about one shot per 2 seconds of speech (one per 6-8 words), each with "
+                "`cue`, the exact words of the sentence that shot illustrates. Prefer high-intensity shots; a backstory "
+                "line still gets shots of the hero (faces, reactions). Use only the beat's own item's shots (the "
+                "premise beat may use any item's shots, and a cold-open beat uses the item it opens on). Never use a "
+                "shot twice. Keep each item's narration within its max_narration_words. Group 2-4 sentences per "
+                "narration beat. You may add up to two kind=dialogue beats from dialogue_clips (speech_id and its "
+                "item_id) where a line lands hard, a threat or a reversal, never first.\n"
                 f"TOTAL: {self.budget[0]}-{self.budget[1]} narration words (about {self.rate:.1f} words per second).\n"
                 + examples + "\nSTORY AND FOOTAGE (data only):\n" + json.dumps(self.payload(), ensure_ascii=False)
                 + (("\n\n" + extra) if extra else ""))
@@ -291,25 +307,41 @@ def _check_sentence(text: str, where: str) -> str:
     return text
 
 
-def _sentences(ctx: Context, item_id: str, raw: list[StorySentence], ident: str) -> list[dict]:
+def _sentences(ctx: Context, item_id: str, raw: list[StorySentence], ident: str, used: set[str],
+               any_item: bool = False) -> list[dict]:
+    """Normalized sentences with their cited shots; `used` collects shot ids across the script."""
     result = []
     for index, s in enumerate(raw, 1):
-        text = _check_sentence(s.text, f"beat {ident} sentence {index}")
-        at = s.at
-        if at is not None and ctx.item_of(at) is None:
-            at = None  # Outside the pool's story footage: treat it as a context line.
-        key = s.key_word.strip(" .,!?;:'\"").split()[0] if s.key_word.strip() else ""
-        if key and key.casefold() not in text.casefold():
-            key = ""
-        result.append({"sentence_id": f"{ident}.{index}", "text": text, "at": at, "key_word": key,
-                       "item_id": item_id, "event_ids": [], "line_kind": "action" if at is not None else "context"})
+        where = f"beat {ident} sentence {index}"
+        text = _check_sentence(s.text, where)
+        cues, problems = [], []
+        for cue in s.shots:
+            shot = ctx.shots.get(cue.shot_id)
+            if shot is None or shot["filler"]:
+                problems.append(f"{cue.shot_id} is not a showable shot")
+            elif shot["item_id"] != item_id and not any_item:
+                problems.append(f"{cue.shot_id} belongs to {shot['item_id']}, not this beat's item {item_id}")
+            elif cue.shot_id in used:
+                problems.append(f"{cue.shot_id} is already used")
+            else:
+                used.add(cue.shot_id)
+                words = cue.cue.strip()
+                cues.append({"shot_id": cue.shot_id,
+                             "cue": words if words and words.casefold() in text.casefold() else ""})
+        if not cues:
+            best = [x["id"] for x in sorted(ctx.shot_list(item_id), key=lambda x: -x["intensity"])
+                    if x["id"] not in used][:6]
+            raise ValueError(f"{where} cites no usable shot ({'; '.join(problems) or 'none given'}); cite the shots "
+                             f"that show it, e.g. from {best}")
+        result.append({"sentence_id": f"{ident}.{index}", "text": text, "shots": cues, "item_id": item_id,
+                       "event_ids": [], "line_kind": "action"})
     return result
 
 
 def validate_script(ctx: Context, script: StorylineScript, *, budget: bool = True, story: bool = True) -> list[dict]:
     """Storyboard-ready beats, or ValueError with a concrete fix for the writer."""
     known = {i["item_id"] for i in ctx.items}
-    beats, used = [], set()
+    beats, used, shots_used = [], set(), set()
     narration = dialogue = 0
     for raw in script.beats:
         if raw.item_id not in known:
@@ -330,7 +362,7 @@ def validate_script(ctx: Context, script: StorylineScript, *, budget: bool = Tru
             raise ValueError(f"a narration beat for {raw.item_id} has no sentences")
         narration += 1
         ident = f"N{narration:02d}"
-        sentences = _sentences(ctx, raw.item_id, raw.sentences, ident)
+        sentences = _sentences(ctx, raw.item_id, raw.sentences, ident, shots_used, any_item=narration <= 2)
         beats.append({"id": ident, "kind": "narration", "item_id": raw.item_id, "delivery": "normal",
                       "source_gain": NARRATION_SOURCE_GAIN, "sentences": sentences,
                       "text": " ".join(s["text"] for s in sentences)})
@@ -365,13 +397,10 @@ def check_story(ctx: Context, beats: list[dict], *, budget: bool = True) -> None
     if sum(w in CONNECTIVES for w in words) < 2:
         raise ValueError("the cold open and premise do not explain anything; say why it happens and what is at "
                          "stake (because, so, but)")
-    for index, beat in enumerate(narr):
-        if index == 1 or len(beat["sentences"]) < 2:
-            continue  # The premise beat tells backstory over its footage.
-        if not any(s.get("at") is not None and ctx.item_of(s["at"]) == beat["item_id"] for s in beat["sentences"]):
-            title = next((i["title"] for i in ctx.items if i["item_id"] == beat["item_id"]), beat["item_id"])
-            raise ValueError(f"beat {beat['id']} plays over the footage of '{title}' but none of its sentences "
-                             "narrates that moment; anchor at least one sentence (`at`) on it")
+    found = slop(lines)
+    if found:
+        raise ValueError(f"the narration sounds generated: {found}; replace them with concrete, specific words "
+                         "about who does what and why")
     openers = [" ".join(re.findall(r"[\w'’-]+", t.casefold())[:2]) for t in lines]
     repeated = sorted({o for o in openers if o and openers.count(o) > 3})
     if repeated:
@@ -445,8 +474,11 @@ def critique(client, ctx: Context, beats: list[dict]) -> StoryCritique:
                            temperature=0.2, max_output_tokens=8192, thinking="medium")
 
 
+SCORE_KEYS = ("hook", "premise", "causality", "storytelling", "ending", "clarity", "impact")
+
+
 def _scores(c: StoryCritique) -> dict:
-    return {k: getattr(c, k) for k in ("hook", "premise", "causality", "storytelling", "ending", "clarity")}
+    return {k: getattr(c, k) for k in SCORE_KEYS}
 
 
 def rewrite_beat(client, ctx: Context, beats: list[dict], beat_id: str, reason: str, *,
@@ -457,21 +489,28 @@ def rewrite_beat(client, ctx: Context, beats: list[dict], beat_id: str, reason: 
     limits = " and ".join(x for x in (f"at least {min_words} words" if min_words else "",
                                       f"at most {max_words} words" if max_words else "") if x)
     item = next(i for i in ctx.items if i["item_id"] == beat["item_id"])
+    narration_ids = [b["id"] for b in beats if b["kind"] == "narration"]
+    any_item = beat_id in narration_ids[:2]
+    taken = {c["shot_id"] for b in beats if b["kind"] == "narration" and b["id"] != beat_id
+             for x in b["sentences"] for c in x.get("shots", [])}
+    available = [x for i in (ctx.items if any_item else [item]) for x in ctx.shot_list(i["item_id"])
+                 if x["id"] not in taken]
     prompt = (f"Rewrite narration beat {beat_id} only. Problem to fix: {reason}. "
               + (f"Keep it to {limits} in total. " if limits else "")
               + "Keep its place in the story and its link to the beats around it. " + NARRATION_RULE
-              + "Give `at` (a pool second inside this item's footage, or null for a context line) and key_word for "
-              "each sentence.\n" + json.dumps({
+              + "No stock phrases or piled-up adjectives: concrete words about who does what and why. For each "
+              "sentence list `shots` (ids from available_shots that show it, about one per 2 seconds of speech, "
+              "each with `cue`, the words it illustrates).\n" + json.dumps({
                   "beat": beat["text"], "item": {"item_id": item["item_id"], "title": item["title"],
-                                                 "why_it_matters": item.get("story_context", ""),
-                                                 "footage": ctx.ranges[item["item_id"]],
-                                                 "visible_moments": ctx.moments(item["item_id"])},
+                                                 "what_happens": item["what_happens"],
+                                                 "why_it_matters": item.get("story_context", "")},
+                  "available_shots": available,
                   "previous_beat": beats[index - 1]["text"] if index else "",
                   "next_beat": beats[index + 1]["text"] if index + 1 < len(beats) else "",
                   "premise": ctx.plan.get("premise", "")}, ensure_ascii=False))
 
     def validate(result: BeatText):
-        sentences = _sentences(ctx, beat["item_id"], result.sentences, beat_id)
+        sentences = _sentences(ctx, beat["item_id"], result.sentences, beat_id, set(taken), any_item=any_item)
         words = sum(count_words(s["text"]) for s in sentences)
         if max_words and words > max_words:
             raise ValueError(f"rewrite has {words} words; maximum is {max_words}")
@@ -496,138 +535,55 @@ def rewrite_beat(client, ctx: Context, beats: list[dict], beat_id: str, reason: 
 
 
 # ------------------------------------------------------------------ placement
-def _free(spans: list[tuple[float, float]], used: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    free = []
-    for a, b in spans:
-        pieces = [(a, b)]
-        for ua, ub in sorted(used):
-            nxt = []
-            for pa, pb in pieces:
-                if ub <= pa or ua >= pb:
-                    nxt.append((pa, pb))
-                    continue
-                if ua > pa:
-                    nxt.append((pa, ua))
-                if ub < pb:
-                    nxt.append((ub, pb))
-            pieces = nxt
-        free += [(pa, pb) for pa, pb in pieces if pb - pa >= MIN_PIECE]
-    return sorted(free)
-
-
-def _take(free: list[tuple[float, float]], start: float, need: float) -> list[tuple[float, float]]:
-    """Consecutive pieces from `start` onward (then from the earliest free footage) totalling `need`."""
-    ordered = [(max(a, start), b) for a, b in free if b - max(a, start) >= MIN_PIECE] + \
-              [(a, min(b, start)) for a, b in free if min(b, start) - a >= MIN_PIECE]
-    taken, total = [], 0.0
-    for a, b in ordered:
-        if total >= need:
-            break
-        length = min(b - a, need - total)
-        if length < MIN_PIECE and taken:
-            length = min(b - a, MIN_PIECE)
-        taken.append((a, a + length))
-        total += length
-    return taken
-
-
-def _event_at(ctx: Context, a: float, b: float) -> dict | None:
-    best, overlap = None, 0.0
-    for e in ctx.events:
-        o = min(b, e["end"]) - max(a, e["start"])
-        if o > overlap:
-            best, overlap = e, o
-    return best
-
-
-def sentence_needs(beat: dict, rate: float) -> list[tuple[float, float]]:
-    """(seconds spoken, seconds from sentence start to its key word) per sentence."""
-    if beat.get("words"):
-        from ..render import sentence_spans
-        from .picture import key_word_times
-        spans = sentence_spans(beat)
-        keys = key_word_times(beat)
-        return [(b - a, keys.get(i, 0.3 * (b - a))) for i, (a, b) in enumerate(spans)]
-    out = []
-    for s in beat["sentences"]:
-        seconds = count_words(s["text"]) / max(rate, 0.5) + 0.15
-        out.append((seconds, 0.3 * seconds))
-    return out
-
-
 def place_storyline(ctx: Context, beats: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Give every sentence continuous footage of its own item; never drop a sentence.
+    """Cut every sentence to its cited shots, each cut at most MAX_CUT seconds; never drop a sentence.
 
-    Returns (beats with shots, evidence map). Raises only if the whole pool is exhausted.
+    Needs measured word timings. Returns (beats with shots, evidence map).
     """
-    used: list[tuple[float, float]] = []
+    from ..render import sentence_spans
+
+    order = [i["item_id"] for i in ctx.items]
+    footage = Footage(ctx.shots, order)
     for beat in beats:
         if beat["kind"] == "dialogue":
             shot = beat["shots"][0]
-            used.append((shot["start"], shot["end"]))
-    order = [i["item_id"] for i in ctx.items]
-    cursor: dict[str, float] = {}
-    evidence = []
-    placed_beats = []
+            footage.reserve(float(shot["start"]), float(shot["end"]))
+    # Cited shots are kept for their own sentences: fill shots come from the rest.
+    pending = {c["shot_id"] for b in beats if b["kind"] == "narration" for x in b["sentences"] for c in x["shots"]}
+    evidence, placed_beats = [], []
     for beat in beats:
         beat = copy.deepcopy(beat)
         if beat["kind"] != "narration":
             placed_beats.append(beat)
             continue
-        item = beat["item_id"]
-        shots = []
-        for index, (sentence, (need, key_offset)) in enumerate(zip(beat["sentences"], sentence_needs(beat, ctx.rate))):
-            want = need * WINDOW_HEADROOM
-            at = sentence.get("at")
-            own = ctx.ranges.get(item, [])
-            start = cursor.get(item, own[0][0] if own else 0.0)
-            if at is not None and ctx.item_of(at) == item:
-                start = max(start, at - key_offset - 0.15) if at - key_offset - 0.15 >= start else start
-            pieces = _take(_free(own, used), start, want)
-            borrowed = []
-            total = sum(b - a for a, b in pieces)
-            if total < want * 0.98:
-                # This item's footage is spent: continue with the neighbouring items' unused footage.
-                position = order.index(item) if item in order else 0
-                for other in sorted((o for o in order if o != item), key=lambda o: abs(order.index(o) - position)):
-                    extra = _take(_free(ctx.ranges[other], used + pieces), ctx.ranges[other][0][0], want - total)
-                    if extra:
-                        borrowed.append(other)
-                        pieces += extra
-                        total += sum(b - a for a, b in extra)
-                    if total >= want * 0.98:
-                        break
-            if total < need * 0.86:
-                raise ValueError(f"the footage pool is exhausted at {sentence['sentence_id']} ({total:.1f}s for "
-                                 f"{need:.1f}s of narration); discovery needs more footage")
-            used += pieces
-            if pieces and not borrowed:
-                cursor[item] = pieces[-1][1]
-            anchor_piece = None
-            if at is not None:
-                anchor_piece = next((p for p in pieces if p[0] <= at <= p[1]), None)
-            for n, (a, b) in enumerate(pieces):
-                event = _event_at(ctx, a, b)
-                own_piece = ctx.item_of((a + b) / 2) == item
-                anchor = at if (a, b) == anchor_piece else (a + b) / 2
-                shot = {"start": round(a, 3), "end": round(b, 3), "anchor": round(anchor, 3),
-                        "focus_x": float((event or {}).get("focus_x", 0.5)), "sentence_index": index,
-                        "sentence_id": sentence["sentence_id"], "shot_id": f"{sentence['sentence_id']}#{n + 1}",
-                        "event_id": (event or {}).get("id", ""),
-                        "shows": (event or {}).get("visible_action", ""),
-                        "reason": "story item footage" if own_piece else "neighbouring story footage (item exhausted)",
-                        "relevance": 1.0 if own_piece else 0.6, "shot_bounds": [round(a, 3), round(b, 3)]}
-                if (a, b) == anchor_piece and sentence.get("key_word"):
-                    shot.update(key_clip=True, key_time=round(key_offset, 3))
-                shots.append(shot)
-            evidence.append({"sentence_id": sentence["sentence_id"], "beat_id": beat["id"], "item_id": item,
-                             "text": sentence["text"], "at": at, "estimated_seconds": round(need, 2),
-                             "footage_seconds": round(total, 2), "borrowed_from": borrowed,
-                             "shots": [{k: s[k] for k in ("start", "end", "anchor", "shows")} for s in shots
-                                       if s["sentence_index"] == index]})
+        spans = sentence_spans(beat)
+        shots, offset = [], 0
+        for index, (sentence, span) in enumerate(zip(beat["sentences"], spans)):
+            cited = [c["shot_id"] for c in sentence["shots"]]
+            pending -= set(cited)
+            cuts = cue_times(sentence, beat["words"], span, offset)
+            offset += sum(1 for t in sentence["text"].split() if _normal(t))
+            saved = {sid: footage.free[sid] for sid in pending}
+            for sid in pending:  # Hide later sentences' cited shots from the fill search.
+                footage.free[sid] = []
+            placed, notes = place_sentence(footage, beat["item_id"], cited, cuts, span[1] - span[0],
+                                           index, sentence["sentence_id"])
+            footage.free.update(saved)
+            shots += placed
+            evidence.append({"sentence_id": sentence["sentence_id"], "beat_id": beat["id"], "item_id": beat["item_id"],
+                             "text": sentence["text"], "estimated_seconds": round(span[1] - span[0], 2),
+                             "footage_seconds": round(sum(x["end"] - x["start"] for x in placed), 2),
+                             "cited_shots": cited, "longest_cut": round(max(x["end"] - x["start"] for x in placed), 2),
+                             "notes": notes, "shots": [{k: x[k] for k in ("shot_id", "start", "end", "shows", "reason")}
+                                                       for x in placed]})
         beat["shots"] = shots
         placed_beats.append(beat)
     return placed_beats, evidence
+
+
+def _normal(token: str) -> str:
+    from ..voice import _normal as normal
+    return normal(token)
 
 
 # ------------------------------------------------------------------ visual check
@@ -666,7 +622,6 @@ def visual_check(client, file, ctx: Context, beats: list[dict]) -> list[dict]:
 def run_storyline_pipeline(request: dict, source: Path, source_duration: float, workdir: Path, outdir: Path, *,
                            scenes: list[dict], speech: dict | None, transport=None, synthesize=None,
                            log=print, sleep=None):
-    from .analysis import ANALYSIS_VERSION, analyze_footage
     from .pipeline import Run, _key
     from .sync import duck_source_dialogue, timing_report
 
@@ -677,25 +632,18 @@ def run_storyline_pipeline(request: dict, source: Path, source_duration: float, 
     models = run.client.resolve_models()
     _write_json(outdir / "gemini-settings.json", {**run.settings.to_json(), "path": "storyline"})
     source_key = _key(str(source), source_duration, [(s["id"], s["start"], s["end"]) for s in scenes])
-    # 1. Moment log
-    try:
-        run.inventory = run.checkpoint(
-            "A-event-inventory", [ANALYSIS_VERSION, source_key, run.settings.analysis, models["analysis"],
-                                  request.get("story_notes", ""), run.speech.get("cache_key")],
-            lambda: analyze_footage(run.client, source, workdir, scenes, run.speech, request.get("story_notes", ""),
-                                    source_duration, log), "event-inventory.json")
-    except (ValueError, GeminiOutputError) as exc:
-        # The story plan and the pool map still say what each stretch shows.
-        log(f"Gemini: footage analysis failed ({str(exc)[:160]}); using the discovery descriptions")
-        run.record(stage="A", action="analysis", outcome="failed", error=str(exc)[:300])
-        run.inventory = {"events": [], "coverage": {}}
-    if not run.inventory.get("events"):
-        run.inventory["events"] = [{"id": f"P{n:03d}", "start": p["pool_start"], "end": p["pool_end"],
-                                    "peak": (p["pool_start"] + p["pool_end"]) / 2, "visible_action": p["shows"],
-                                    "focus_x": 0.5} for n, p in enumerate(pool_map, 1)]
-    if run.inventory.get("source_flags", {}).get("voice_over_narration"):
-        run.speech_pool = {}
-    ctx = Context(plan, pool_map, run.inventory, run.speech_pool, request, run.rate, run.target)
+    # 1. Shot catalog: every detected shot of the pool, labelled.
+    shots = catalog_shots(scenes, item_ranges(pool_map))
+    items = {i["item_id"]: i for i in plan["items"]}
+
+    def label():
+        return label_shots(run.client, run.ensure_file(), shots, items, log=log)
+
+    catalog = run.checkpoint("A-shot-catalog", [STORYLINE_VERSION, source_key, shots, models["analysis"]], label,
+                             "shot-catalog.json")
+    run.inventory = {"events": [], "coverage": {"shots": len(catalog),
+                                                "filler": sum(1 for x in catalog.values() if x["filler"])}}
+    ctx = Context(plan, pool_map, catalog, run.speech_pool, request, run.rate, run.target)
     run.editorial = {"hook_event_id": None, "selected": []}
     # 2-3. Story script and story editor
     inputs = [STORYLINE_VERSION, plan, pool_map, ctx.budget, models["writing"], models["planning"],
@@ -769,8 +717,7 @@ def run_storyline_pipeline(request: dict, source: Path, source_duration: float, 
     # Quality record
     lines = [s["text"] for b in beats if b["kind"] == "narration" for s in b["sentences"]]
     critiques = script.get("critiques", [])
-    if critiques and min(v for k, v in critiques[-1].items() if k in ("hook", "premise", "causality",
-                                                                       "storytelling", "ending", "clarity")) <= 2:
+    if critiques and min(v for k, v in critiques[-1].items() if k in SCORE_KEYS) <= 2:
         issues.append({"check": "story_quality", "severity": "major", "origin": "gemini_review",
                        "description": f"story editor scores {critiques[-1]}"})
     if script.get("draft", {}).get("accepted_with_issue"):
@@ -779,7 +726,13 @@ def run_storyline_pipeline(request: dict, source: Path, source_duration: float, 
     if play_by_play(lines):
         issues.append({"check": "pacing", "severity": "major", "description": "frame-by-frame narration remains",
                        "origin": "deterministic"})
-    borrowed = [e["sentence_id"] for e in evidence if e["borrowed_from"]]
+    cuts = [x["end"] - x["start"] for b in beats if b["kind"] == "narration" for x in b["shots"]]
+    long_cuts = sum(1 for c in cuts if c > MAX_CUT + 0.45)
+    if long_cuts:
+        issues.append({"check": "cut_length", "severity": "minor", "origin": "deterministic",
+                       "description": f"{long_cuts} cut(s) longer than {MAX_CUT + 0.45:.1f}s"})
+    borrowed = [e["sentence_id"] for e in evidence if any(x["reason"] == "neighbouring story moment"
+                                                          for x in e["shots"])]
     total = sum(b["duration"] for b in beats)
     if total < run.target * 0.8:
         issues.append({"check": "duration", "severity": "major", "origin": "deterministic",
@@ -787,11 +740,14 @@ def run_storyline_pipeline(request: dict, source: Path, source_duration: float, 
     review_status = "passed_with_warnings" if issues else "passed_automated_review"
     _write_json(outdir / "quality-review.json", {
         "review_status": review_status, "path": "storyline", "story_critique": critiques, "issues": issues,
-        "sentences_borrowing_neighbour_footage": borrowed, "duration_seconds": round(total, 2),
+        "sentences_borrowing_neighbour_footage": borrowed,
+        "cuts": {"count": len(cuts), "median_seconds": round(sorted(cuts)[len(cuts) // 2], 2) if cuts else 0,
+                 "longest_seconds": round(max(cuts), 2) if cuts else 0}, "duration_seconds": round(total, 2),
         "note": "Automated review does not replace human playback review."})
     _write_json(outdir / "evidence-map.json", {"sentences": evidence, "policy": (
-        "Every narration sentence plays over continuous footage of its own story item (neighbouring items only "
-        "when that item's footage is spent); no sentence is removed for lack of footage.")})
+        "Every narration sentence cuts to the shots it cites, each on the words it illustrates, at most "
+        f"{MAX_CUT}s per cut, gaps filled with the same moment's next best shots; filler only when nothing else is "
+        "left; no sentence is removed for lack of footage.")})
     _write_json(outdir / "correction-history.json", run.history)
     ducking = duck_source_dialogue(beats, run.segments)
     _write_json(outdir / "narration-timing.json", {**timing_report(beats), "source_ducking": ducking})

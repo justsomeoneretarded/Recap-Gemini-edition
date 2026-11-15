@@ -86,7 +86,8 @@ Put **`discover`** (or `discover:John Wick (2014)` to name the film) in **Source
    - The writer gets opening excerpts from two reference recaps about other films as style examples.
    - A story editor scores the script, and a weak script is rewritten once. The editor's beat notes then become targeted rewrites: factual errors about the film first, up to three beats.
    - Every beat except the premise narrates its own story moment.
-   - Each sentence plays over continuous footage of its own story moment, and the moment it narrates lands on its key word.
+   - Every shot of the found footage is logged by Gemini (what is visible, intensity, filler or not). Each sentence cites the shots that show what it says. Each shot cuts in on the words it illustrates and stays on screen for at most 2.2 seconds. Gaps are filled with the same moment's next best shots, and filler never plays. The reference recaps also cut about every 1.5–2 seconds.
+   - A deterministic check and the story editor's "impact" score reject AI-sounding narration (stock phrases, piled-up adjectives).
    - A Short that is too long or too short is fixed by rewriting whole beats. Sentences are never deleted.
    - A final Gemini check flags narration that contradicts the picture.
 

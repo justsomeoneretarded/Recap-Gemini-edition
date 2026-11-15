@@ -1,4 +1,4 @@
-"""Story-first production for discovered footage: script rules, continuous placement, end to end."""
+"""Story-first production for discovered footage: script rules, shot-level cuts, end to end."""
 import json
 import re
 from pathlib import Path
@@ -24,8 +24,19 @@ PLAN = {"film": "John Wick: Chapter 3 - Parabellum", "year": 2019,
 POOL = [{"pool_start": 0.0, "pool_end": 10.0, "item_id": "I1", "item_title": "Bounty placed", "shows": "hotel"},
         {"pool_start": 10.0, "pool_end": 20.0, "item_id": "I2", "item_title": "Library fight", "shows": "library"},
         {"pool_start": 20.0, "pool_end": 30.0, "item_id": "I3", "item_title": "The Elder", "shows": "desert tent"}]
-EVENTS = [{"id": f"EV{n}", "start": a, "end": a + 5, "peak": a + 2.5, "visible_action": f"moment {n}",
-           "focus_x": 0.3} for n, a in enumerate(range(0, 30, 5), 1)]
+# Four 2.5 s shots per story item; the last shot of I1 is filler.
+SCENES = [{"id": f"S{n:04d}", "start": n * 2.5, "end": (n + 1) * 2.5} for n in range(12)]
+
+
+def labelled_catalog() -> dict:
+    from shorts_pipeline.gemini.shots import catalog_shots
+    shots = catalog_shots(SCENES, storyline.item_ranges(POOL))
+    return {s["shot_id"]: {**s, "visible": f"John in {s['shot_id']}", "intensity": 4,
+                           "filler": s["shot_id"] == "I1-004", "peak": (s["start"] + s["end"]) / 2,
+                           "motion": "normal", "focus_x": 0.4} for s in shots}
+
+
+SHOTS = labelled_catalog()
 WORDS = ("because the bounty keeps growing every killer in the city now wants the reward and the clock "
          "never stops while he runs so nobody can save him before the hour ends").split()
 OPENERS = ["John", "Winston", "Every", "Hours", "Nobody", "Now", "Then", "Blood", "Tonight", "Only", "Still", "Soon",
@@ -38,23 +49,33 @@ def line(n: int, number: int) -> str:
     return " ".join(body[:n - 1] + ["tonight"]) + "."
 
 
-def script_for(total: int, *, first="narration", choppy=False, name=True) -> dict:
-    """Cold open on I3, premise on I1, then I2 and the ending on I3."""
-    plan = [("I3", 2, 25.0), ("I1", 2, None), ("I2", 2, 14.0), ("I3", 2, 28.0)]
+def cite(shot_id: str, text: str, second: bool = False) -> list[dict]:
+    words = text.rstrip(".").split()
+    cues = [{"shot_id": shot_id, "cue": " ".join(words[:2])}]
+    return cues
+
+
+def script_for(total: int, *, first="narration", choppy=False, name=True, shots=None) -> dict:
+    """Cold open on I3, premise on I1, then I2 and the ending on I3; each sentence cites one shot."""
+    shots = shots or {k: sorted(x for x, v in SHOTS.items() if v["item_id"] == k and not v["filler"])
+                      for k in ("I1", "I2", "I3")}
+    pools = {k: list(v) for k, v in shots.items()}
+    plan = [("I3", 2), ("I1", 2), ("I2", 2), ("I3", 2)]
     per = max(6, total // 8)
     beats, number = [], 0
-    for item, count, at in plan:
+    for item, count in plan:
         sentences = []
         for _ in range(count):
             text = ("He runs. He hits. He falls." if choppy and number < 3 else line(per, number))
             if not name:
                 text = text.replace("John", "Someone").replace("Wick", "man")
-            sentences.append({"text": text, "at": at, "key_word": text.split()[0]})
+            source = pools[item] or pools["I2"] or pools["I1"]
+            sentences.append({"text": text, "shots": cite(source.pop(0), text)})
             number += 1
         beats.append({"kind": "narration", "item_id": item, "sentences": sentences})
     if choppy:
-        beats[0]["sentences"] = [{"text": t, "at": None, "key_word": ""} for t in
-                                 ("He runs away.", "He hits hard.", "He falls down.")]
+        beats[0]["sentences"] = [{"text": t, "shots": [{"shot_id": sid, "cue": ""}]} for t, sid in
+                                 zip(("He runs away.", "He hits hard.", "He falls down."), ("I2-003", "I2-004", "I1-003"))]
     if first == "dialogue":
         beats.insert(0, {"kind": "dialogue", "item_id": "I2", "speech_id": "D0001", "sentences": []})
     return {"title": "Everyone Wants Him Dead", "description": "A hitman runs out of time.", "beats": beats}
@@ -73,40 +94,45 @@ def budget(parts) -> tuple[int, int]:
 
 def rewrite(parts):
     text = parts[0]["text"]
-    footage = re.search(r'"footage": \[\[([\d.]+), ([\d.]+)\]', text)
-    at = float(footage.group(1)) + 1 if footage else None
+    available = re.findall(r'"id": "([A-Z0-9-]+)"', text)
+    cites = lambda k: [{"shot_id": available[k], "cue": ""}] if len(available) > k else []
     most = re.search(r"at most (\d+) words", text)
     least = re.search(r"at least (\d+) words", text)
     n = int(most.group(1)) if most else (int(least.group(1)) + 2 if least else 16)
     if least and not most:
         n = int(least.group(1)) + 2
     if n < 14:
-        return {"sentences": [{"text": line(max(6, n), 7), "at": at, "key_word": ""}], "rationale": "fit"}
+        return {"sentences": [{"text": line(max(6, n), 7), "shots": cites(0)}], "rationale": "fit"}
     first = max(6, n // 2)
-    return {"sentences": [{"text": line(first, 7), "at": at, "key_word": ""},
-                          {"text": line(max(6, n - first), 11), "at": None, "key_word": ""}], "rationale": "fit"}
+    return {"sentences": [{"text": line(first, 7), "shots": cites(0)},
+                          {"text": line(max(6, n - first), 11), "shots": cites(1)}], "rationale": "fit"}
 
 
 def transport(critique_score=5, contradictions=None, beat_notes=None):
     def write(parts):
         low, high = budget(parts)
-        return script_for((low + high) // 2)
+        listed = {i["item_id"]: [x["id"] for x in i["shots"]] for i in payload(parts)["story_items_in_film_order"]}
+        return script_for((low + high) // 2, shots=listed)
+
+    def label(parts):
+        listing = re.findall(r"'shot_id': '([^']+)', 'start': ([\d.]+), 'end': ([\d.]+)", parts[-1]["text"])
+        return {"shots": [{"shot_id": sid, "visible": f"John fights in {sid}", "intensity": 4,
+                           "filler": sid == "I1-004", "peak": (float(a) + float(b)) / 2, "motion": "normal",
+                           "focus_x": 0.4} for sid, a, b in listing]}
 
     def check(parts):
         return {"contradictions": contradictions or []}
 
-    scores = {k: critique_score for k in ("hook", "premise", "causality", "storytelling", "ending", "clarity")}
-    return FakeTransport(events=[{"event_id": e["id"], "start": e["start"], "end": e["end"], "peak": e["peak"],
-                                  "visible_action": e["visible_action"], "focus_x": 0.3, "kind": "action",
-                                  "importance": 4, "confidence": 0.9} for e in EVENTS],
-                         overrides={"StorylineScript": write, "BeatText": rewrite, "VisualCheck": check,
+    scores = {k: critique_score for k in storyline.SCORE_KEYS}
+    return FakeTransport(overrides={"StorylineScript": write, "BeatText": rewrite, "VisualCheck": check,
+                                    "ShotLabels": label,
                                     "StoryCritique": {**scores, "problems": ["weak hook"], "rewrite_notes": "sharpen",
                                                       "beat_notes": beat_notes or []}})
 
 
 def context(**extra) -> Context:
     request = {"title": "t", "brief": "", "user_story_notes": "The protagonist is John Wick.", **extra}
-    return Context(PLAN, POOL, {"events": EVENTS}, {}, request, rate=3.0, target=20)
+    return Context(PLAN, POOL, SHOTS, {}, request, rate=3.0, target=20)
 
 
 # ------------------------------------------------------------------ rules
@@ -133,7 +159,7 @@ def test_script_rules_reject_dialogue_first_frame_by_frame_and_a_missing_hero():
 def test_dialogue_clip_may_not_open_the_short():
     quote = {"id": "D0001", "start": 12.0, "end": 13.5, "text": "Hold the line.", "confidence": 0.9,
              "words": [{"word": "Hold", "start": 0, "end": 0.4}], "timing_provenance": "asr"}
-    ctx = Context(PLAN, POOL, {"events": EVENTS}, {"D0001": quote}, {"title": "t", "user_story_notes": "John Wick"},
+    ctx = Context(PLAN, POOL, SHOTS, {"D0001": quote}, {"title": "t", "user_story_notes": "John Wick"},
                   rate=3.0, target=20)
     low, high = ctx.budget
     with pytest.raises(ValueError, match="cannot open"):
@@ -154,49 +180,51 @@ def measured(beat: dict, rate: float = 3.0) -> dict:
             "words": [{"word": t, "start": 0.1 + i * step, "end": 0.1 + (i + 0.9) * step} for i, t in enumerate(tokens)]}
 
 
-def test_every_sentence_plays_over_continuous_footage_of_its_own_item_and_none_is_dropped():
+def test_every_sentence_cuts_to_its_cited_shots_at_most_every_two_seconds_and_none_is_dropped():
     ctx = context()
     low, high = ctx.budget
-    beats = [measured(b) for b in validate_script(ctx, StorylineScript.model_validate(script_for(low)))]
+    beats = [measured(b) for b in validate_script(ctx, StorylineScript.model_validate(script_for(high)))]
     placed, evidence = place_storyline(ctx, beats)
     assert len(evidence) == sum(len(b["sentences"]) for b in beats)  # Nothing removed.
-    spans = []
+    windows = []
     for beat in placed:
-        own = ctx.ranges[beat["item_id"]]
+        for sentence in beat["sentences"]:
+            mine = [x for x in beat["shots"] if x["sentence_id"] == sentence["sentence_id"]]
+            # The cited shot opens the sentence, inside its own catalog shot.
+            first = sentence["shots"][0]["shot_id"]
+            assert mine[0]["shot_id"] == first
+            assert SHOTS[first]["start"] - 1e-6 <= mine[0]["start"] and mine[0]["end"] <= SHOTS[first]["end"] + 1e-6
         for shot in beat["shots"]:
-            if shot["relevance"] == 1.0:
-                assert any(a - 1e-6 <= shot["start"] and shot["end"] <= b + 1e-6 for a, b in own)
-            spans.append((shot["start"], shot["end"]))
-    spans.sort()
-    assert all(b1 <= a2 + 1e-6 for (_, b1), (a2, _) in zip(spans, spans[1:]))  # No footage shown twice.
+            assert shot["end"] - shot["start"] <= storyline.MAX_CUT + 0.41  # Fast cutting.
+            assert not SHOTS[shot["shot_id"]]["filler"]  # Filler never plays while other shots are left.
+            windows.append((shot["start"], shot["end"]))
+    windows.sort()
+    assert all(b1 <= a2 + 1e-6 for (_, b1), (a2, _) in zip(windows, windows[1:]))  # No footage shown twice.
     for entry in evidence:
-        assert entry["footage_seconds"] >= entry["estimated_seconds"] * 0.98
-    # The cold open (I3) uses the moment it narrates; the closing I3 beat continues after it.
-    hook = [s for s in placed[0]["shots"]]
-    ending = [s for s in placed[3]["shots"]]
-    # The closing I3 beat uses the rest of I3's footage, never the stretch the cold open already showed.
-    assert all(20 <= s["start"] and s["end"] <= 30 for s in hook + ending)
-    assert not any(min(a["end"], b["end"]) - max(a["start"], b["start"]) > 1e-6 for a in hook for b in ending)
-    assert any(s.get("key_clip") and s["start"] <= 25.0 <= s["end"] for s in hook)
+        assert abs(entry["footage_seconds"] - entry["estimated_seconds"]) < 0.05
 
 
-def test_an_exhausted_item_borrows_neighbouring_footage_instead_of_dropping_lines():
-    pool = [dict(POOL[0], pool_end=3.0), dict(POOL[1], pool_start=3.0), POOL[2]]
-    ctx = Context(PLAN, pool, {"events": EVENTS}, {}, {"title": "t", "user_story_notes": "John Wick"},
-                  rate=3.0, target=20)
-    beat = measured({"id": "N01", "kind": "narration", "item_id": "I1", "text": "", "sentences": [
-        {"sentence_id": "N01.1", "text": line(14, 1), "at": None, "key_word": "", "item_id": "I1"}]})
-    beat = measured({**beat, "text": beat["sentences"][0]["text"]})
-    placed, evidence = place_storyline(ctx, [beat])
-    assert evidence[0]["borrowed_from"] == ["I2"]
-    assert evidence[0]["footage_seconds"] >= evidence[0]["estimated_seconds"] * 0.98
+def test_a_cue_cuts_the_picture_on_the_words_it_illustrates():
+    from shorts_pipeline.gemini.shots import cue_times
+    sentence = {"text": "John grabs a book and smashes the giant with it.",
+                "shots": [{"shot_id": "I2-001", "cue": "John grabs a book"}, {"shot_id": "I2-002", "cue": "smashes the giant"}]}
+    words = [{"word": w, "start": 0.3 * i, "end": 0.3 * i + 0.25} for i, w in enumerate(sentence["text"].split())]
+    assert cue_times(sentence, words, (0.0, 3.0), 0) == [0.0, pytest.approx(1.5)]  # "smashes" is word 5.
+
+
+def test_slop_is_rejected():
+    from shorts_pipeline.gemini.shots import slop
+    assert slop(["Little did he know the clock is ticking."])
+    assert slop(["A brutal, deadly, ruthless, relentless fight begins."])
+    assert not slop(["John drives a pencil through the man's hand because the man came to collect the bounty."])
 
 
 # ------------------------------------------------------------------ end to end
 @pytest.fixture
 def discovered(tmp_path, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test-key-123456")
-    from shorts_pipeline import source_speech
+    from shorts_pipeline import source_speech, sources
+    monkeypatch.setattr(sources, "index_source", lambda path, work: [dict(x) for x in SCENES])
     from shorts_pipeline.gemini import discovery
     monkeypatch.setattr(source_speech, "analyze_source_speech", lambda path, work: {"cache_key": "none",
                                                                                      "segments": [], "candidates": []})
@@ -232,6 +260,10 @@ def test_discovered_footage_is_narrated_as_a_story_over_its_own_footage(discover
     assert len(evidence["sentences"]) == sum(len(b["sentences"]) for b in timeline["beats"] if b["kind"] == "narration")
     quality = json.loads((out / "quality-review.json").read_text())
     assert quality["path"] == "storyline" and quality["story_critique"][0]["hook"] == 5
+    assert quality["cuts"]["longest_seconds"] <= storyline.MAX_CUT + 0.41 and quality["cuts"]["count"] >= 8
+    catalog = json.loads((out / "shot-catalog.json").read_text())
+    assert catalog["I1-004"]["filler"] and not any(x["shot_id"] == "I1-004" for b in timeline["beats"]
+                                                   for x in b.get("shots", []) if "shot_id" in x)
     assert "John" in (out / "script.txt").read_text()
 
 
@@ -301,7 +333,7 @@ def test_only_clean_short_film_lines_are_offered_as_dialogue():
     pool = {"D1": quote("D1", "little run down there John. Ernest I still have time. He's almost up.", 11, 15),
             "D2": quote("D2", "I still have time.", 12, 13.2),
             "D3": quote("D3", "Who's gonna know?", 14, 15, confidence=0.5)}
-    ctx = Context(PLAN, POOL, {"events": EVENTS}, pool, {"title": "t", "user_story_notes": "John Wick"},
+    ctx = Context(PLAN, POOL, SHOTS, pool, {"title": "t", "user_story_notes": "John Wick"},
                   rate=3.0, target=20)
     assert [c["speech_id"] for c in ctx.dialogue_clips()] == ["D2"]
     low, high = ctx.budget
@@ -312,17 +344,20 @@ def test_only_clean_short_film_lines_are_offered_as_dialogue():
     assert [b["speech_id"] for b in beats if b["kind"] == "dialogue"] == ["D2"]
 
 
-def test_a_beat_must_narrate_its_own_footage():
+def test_a_beat_may_only_cite_its_own_shots_after_the_opening():
     ctx = context()
     low, high = ctx.budget
     data = script_for((low + high) // 2)
-    for sentence in data["beats"][2]["sentences"]:  # The library beat talks about something else entirely.
-        sentence["at"] = None
-    with pytest.raises(ValueError, match="none of its sentences narrates that moment"):
+    data["beats"][2]["sentences"][0]["shots"] = [{"shot_id": "I3-004", "cue": ""}]  # Library beat, Elder shot.
+    with pytest.raises(ValueError, match="belongs to I3"):
         validate_script(ctx, StorylineScript.model_validate(data))
-    # The premise beat may tell backstory over its footage.
     data = script_for((low + high) // 2)
-    assert all(s["at"] is None for s in data["beats"][1]["sentences"])
+    data["beats"][2]["sentences"][0]["shots"] = [{"shot_id": "I1-004", "cue": ""}]  # Filler.
+    with pytest.raises(ValueError, match="not a showable shot"):
+        validate_script(ctx, StorylineScript.model_validate(data))
+    # The premise beat (I1) may show the hero from any moment.
+    data = script_for((low + high) // 2)
+    data["beats"][1]["sentences"][0]["shots"] = [{"shot_id": "I2-004", "cue": ""}]
     validate_script(ctx, StorylineScript.model_validate(data))
 
 
