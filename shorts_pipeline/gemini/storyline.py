@@ -42,6 +42,7 @@ from .shots import MAX_CUT, Footage, catalog_shots, cue_times, label_shots, plac
 from .story import with_repair
 
 STORYLINE_VERSION = 3
+SCRIPT_VERSION = 2       # Bump when the writing rules change: the script is rewritten, the shot catalog is kept.
 MAX_NOTE_REWRITES = 3    # Beats the story editor names get one targeted rewrite each, at most this many.
 FILL = 0.95              # Narration fills this share of the target; dialogue and breaths take the rest.
 ITEM_SHARE = 0.85        # An item's narration may use this share of the item's own footage.
@@ -149,7 +150,10 @@ STRUCTURE = (
     "can see in the shots, plus the reason or the cost. No stock phrases ('little did he know', 'all hell breaks "
     "loose', 'a deadly game', 'the clock is ticking', 'all-out war', 'unleash'), no piles of adjectives (deadly, "
     "brutal, ruthless, relentless, epic, intense). Specific beats generic: 'a pencil through the hand' beats 'a "
-    "brutal fight'.\n"
+    "brutal fight'. A reason must be a story fact (who wants what, who did what to whom): never tack on a generic "
+    "one ('because survival is his only option', 'because escape is blocked', 'because lethal force is "
+    "required'). Use 'because' only for real reasons, a few times in the whole script; link the rest with so, "
+    "but, until, when, or just state the consequence.\n"
     "STYLE: sentences of 10-24 words with an occasional short punch line; vivid verbs; mostly present tense; spell "
     "numbers as words; no quotation marks; never 'in this movie' or 'this film'.")
 
@@ -385,7 +389,7 @@ def check_story(ctx: Context, beats: list[dict], *, budget: bool = True) -> None
     lines = [s["text"] for b in narr for s in b["sentences"]]
     if play_by_play(lines):
         raise ValueError("three or more short sentences in a row describe the picture one action at a time; "
-                         "rewrite them as story with cause and effect (so, but, because, until)")
+                         "rewrite them as story with cause and effect (so, but, until, when)")
     short = [t for t in lines if count_words(t) < 6]
     if len(short) > 2:
         raise ValueError(f"too many fragment sentences {short[:4]}; keep at most two short punch lines")
@@ -396,7 +400,7 @@ def check_story(ctx: Context, beats: list[dict], *, budget: bool = True) -> None
     words = [w.strip(".,!?;:'\"").lower() for w in opening.split()]
     if sum(w in CONNECTIVES for w in words) < 2:
         raise ValueError("the cold open and premise do not explain anything; say why it happens and what is at "
-                         "stake (because, so, but)")
+                         "stake (so, but, when, until, because)")
     found = slop(lines)
     if found:
         raise ValueError(f"the narration sounds generated: {found}; replace them with concrete, specific words "
@@ -528,7 +532,7 @@ def rewrite_beat(client, ctx: Context, beats: list[dict], beat_id: str, reason: 
     opening = [b["id"] for b in beats if b["kind"] == "narration"][:2]
     if beat_id in opening:
         prompt += ("\nThis beat is part of the opening: together with the other opening beat it must name the hero "
-                   "and say what he did and why he is in danger (because, so, but).")
+                   "and say what he did and why he is in danger.")
     candidate, _ = with_repair(client, "writing:storyline_rewrite", BeatText, [text_part(prompt)], WRITER_SYSTEM,
                                validate, attempts=3, temperature=0.6, max_output_tokens=8192, thinking="medium")
     return candidate
@@ -646,7 +650,7 @@ def run_storyline_pipeline(request: dict, source: Path, source_duration: float, 
     ctx = Context(plan, pool_map, catalog, run.speech_pool, request, run.rate, run.target)
     run.editorial = {"hook_event_id": None, "selected": []}
     # 2-3. Story script and story editor
-    inputs = [STORYLINE_VERSION, plan, pool_map, ctx.budget, models["writing"], models["planning"],
+    inputs = [STORYLINE_VERSION, SCRIPT_VERSION, plan, pool_map, ctx.budget, models["writing"], models["planning"],
               request.get("brief"), request.get("user_story_notes"), run.rate]
 
     def compose():
@@ -785,9 +789,48 @@ def _apply_beat_notes(run, ctx: Context, beats: list[dict], review: StoryCritiqu
     return beats, fixed
 
 
+SPEECH_FAILURE = re.compile(r"Narration beat (\S+) failed complete-speech verification")
+MAX_SPEECH_REWRITES = 3
+SPEECH_NOTE = ("the voice engine could not say this line so that speech recognition hears every word. Keep the same "
+               "meaning and the same shots, in plainer spoken words: spell out numbers, avoid rare names, "
+               "abbreviations, hyphenated or invented words and tongue-twisters, and keep every sentence complete")
+
+
+def _synthesize_checked(run, ctx: Context, beats: list[dict]) -> list[dict]:
+    """Synthesize; a beat whose speech fails verification is rewritten in plainer words, then (last resort)
+    verified loosely, so one hard-to-hear line never ends the run. Run 22 died on 'Fierce attack dogs maul',
+    heard as 'Fierce the tech dogs, more'."""
+    rewrites = getattr(run, "speech_rewrites", 0)
+    while True:
+        try:
+            return run.synthesize(beats)
+        except RuntimeError as exc:
+            match = SPEECH_FAILURE.search(str(exc))
+            beat = next((b for b in beats if match and b["id"] == match.group(1) and b["kind"] == "narration"), None)
+            if beat is None or beat.get("loose"):
+                raise
+            if rewrites < MAX_SPEECH_REWRITES and not beat.get("speech_rewritten"):
+                rewrites += 1
+                run.speech_rewrites = rewrites
+                words = count_words(beat["text"])
+                try:
+                    beats = rewrite_beat(run.client, ctx, beats, beat["id"], SPEECH_NOTE,
+                                         min_words=max(6, math.floor(words * 0.85)), max_words=words + 3)
+                    beats = [{**b, "speech_rewritten": True} if b["id"] == beat["id"] else b for b in beats]
+                    run.record(stage="G", action="speech_rewrite", beat_id=beat["id"], outcome="rewritten",
+                               error=str(exc)[:300])
+                    continue
+                except (ValueError, GeminiOutputError) as rewrite_error:
+                    run.record(stage="G", action="speech_rewrite", beat_id=beat["id"], outcome="failed",
+                               error=str(rewrite_error)[:300])
+            beats = [{**b, "loose": True} if b["id"] == beat["id"] else b for b in beats]
+            run.record(stage="G", action="speech_loose_match", beat_id=beat["id"], outcome="retried",
+                       error=str(exc)[:300])
+
+
 def _fit_length(run, ctx: Context, beats: list[dict]) -> list[dict]:
     """Synthesize, then bring the measured length inside [0.85, 1.0] x target by whole-beat rewrites."""
-    beats = run.synthesize(beats)
+    beats = _synthesize_checked(run, ctx, beats)
     for attempt in range(run.settings.max_timing_repairs + 1):
         total = sum(b["duration"] for b in beats)
         narr = [b for b in beats if b["kind"] == "narration"]
@@ -844,7 +887,7 @@ def _fit_length(run, ctx: Context, beats: list[dict]) -> list[dict]:
                                error=str(exc)[:300])
         if not changed:
             break
-        beats = run.synthesize(beats)
+        beats = _synthesize_checked(run, ctx, beats)
     total = sum(b["duration"] for b in beats)
     if total > run.target + 0.05:
         raise ValueError(f"Measured narration is {total:.1f}s; the maximum is {run.target:.0f}s after "

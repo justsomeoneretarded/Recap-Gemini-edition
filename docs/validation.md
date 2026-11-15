@@ -125,3 +125,16 @@ Added after the user's review of run 20: in run 20, one continuous window per se
 
 Offline tests cover cue timing, cut length, no reuse of footage, filler exclusion and own-item shots.
 
+
+### Run 22 additions (15 November 2026)
+Run 22 failed after 50 minutes on a voice check, not a voice failure.
+- **What happened:**
+  - The narration was complete, but Whisper heard "Fierce attack dogs maul" as "Fierce the tech dogs, more", and strict alignment rejected both takes.
+  - The story path had no recovery, so the run stopped.
+  - All three API keys had used up their daily free-tier quota for the full-size Flash models, so the script was written by Flash-Lite. Six of its 18 sentences used "because", most with a hollow reason ("because survival is his only option", "because lethal force is absolutely required").
+- **What changed:**
+  - A beat that fails speech verification is rewritten once in plainer spoken words, then synthesized again.
+  - If it still fails, it is verified loosely as a last resort (`timing_provenance: asr-loose-script-matched`). Loose matching accepts a short stretch heard as different words, but a skipped script word still fails.
+  - The story checks reject generic tacked-on reasons and a pile-up of "because" (more than one sentence in five).
+  - The saved-work cache key no longer contains the date. A run stopped by the daily quota resets at midnight Pacific, which is the next UTC day, so a dated key would make the rerun repeat discovery and shot labelling.
+- **Covered by tests:** `tests/test_gemini_storyline.py` (speech rewrite, loose fallback, hollow reasons) and `tests/test_voice_captions.py` (run 22's real mishearing; a skipped word is still rejected).

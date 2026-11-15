@@ -279,9 +279,15 @@ SLOP_PHRASES = ("little does he know", "little did he know", "in a world where",
                 "chaos ensues", "a deadly dance", "edge of", "embarks on", "journey", "testament to",
                 "tapestry", "delve", "unleash", "unbeknownst", "sends shivers", "a storm of", "a hail of",
                 "in a twist of fate", "fate has other plans", "one thing is certain", "only time will tell",
-                "showdown of", "against all odds", "all-out war", "takes matters into his own hands")
+                "showdown of", "against all odds", "all-out war", "takes matters into his own hands",
+                "total war", "high-stakes", "high stakes", "only option", "no other choice", "no choice but",
+                "survival is", "survival requires", "absolutely", "every single", "at all costs")
 SLOP_ADJECTIVES = ("deadly", "ruthless", "brutal", "relentless", "lethal", "fierce", "epic", "intense",
                    "terrifying", "desperate", "heart-pounding", "explosive", "savage", "vicious")
+# A generic reason tacked on to sound causal (run 22: 'because survival is his only option', 'because escape is
+# blocked', 'because lethal force is absolutely required'). A real reason is a story fact, and it is rare.
+HOLLOW_REASON = re.compile(r"\bbecause (?:survival|escape|it is|it's|there is|there's|he must|he has to|"
+                           r"lethal|force|danger|time|everyone|nothing|failure)\b")
 
 
 def slop(lines: list[str]) -> list[str]:
@@ -291,4 +297,12 @@ def slop(lines: list[str]) -> list[str]:
     adjectives = [w for w in re.findall(r"[a-z'-]+", text) if w in SLOP_ADJECTIVES]
     if len(adjectives) > max(2, len(lines) // 6):
         found.append(f"{len(adjectives)} stock intensity adjectives ({', '.join(sorted(set(adjectives)))})")
+    hollow = HOLLOW_REASON.findall(text)
+    if hollow:
+        found.append(f"generic tacked-on reasons ({'; '.join(sorted(set(hollow)))}...): give the real story reason "
+                     "(who wants what) or drop the clause")
+    because = sum(1 for line in lines if re.search(r"\bbecause\b", line.casefold()))
+    if because > max(2, len(lines) // 5):
+        found.append(f"'because' in {because} of {len(lines)} sentences: most of those reasons are filler; keep "
+                     "only the real ones and link the rest with so, but, until, when or a plain consequence")
     return found

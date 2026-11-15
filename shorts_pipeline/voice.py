@@ -130,7 +130,9 @@ def validate_words(text: str, words: list[dict], duration: float) -> list[dict]:
     return clean
 
 
-def _align_script(text: str, recognized: list[dict], duration: float) -> list[dict]:
+def _align_script(text: str, recognized: list[dict], duration: float, loose: bool = False) -> list[dict]:
+    """Match the recognized words to the script. ``loose`` (a last resort for one beat) accepts a short
+    stretch that ASR heard as different words ('attack' -> 'the tech'); a skipped script word still fails."""
     script = [w for w in text.split() if _normal(w)]
     # Whisper occasionally reports a zero-length word (start == end). Give it a 10 ms
     # duration so a real, recognized word is not rejected as an invalid interval.
@@ -166,7 +168,7 @@ def _align_script(text: str, recognized: list[dict], duration: float) -> list[di
                 # interval over the script words; a skipped or extra word still fails.
                 written="".join(unit for unit,_ in script_units[i:j])
                 heard="".join(w["unit"] for w in spoken_units[a:b])
-                if max(j-i,b-a) > 4 or SequenceMatcher(None,written,heard).ratio() < .5:
+                if max(j-i,b-a) > (6 if loose else 4) or (not loose and SequenceMatcher(None,written,heard).ratio() < .5):
                     raise ValueError("ASR word counts differ; retry speech or provide reviewed word timings.")
                 start,end=spoken_units[a]["start"],spoken_units[b-1]["end"]
                 for k in range(i,j):
@@ -317,10 +319,12 @@ def synthesize_plan(plan: dict, narrator: str, workdir: Path, model: str = "orig
         fingerprint=hashlib.sha256(json.dumps(identity,ensure_ascii=False).encode()).hexdigest()
         audio=cache/f"{fingerprint}.wav"
         metadata=cache/f"{fingerprint}.json"
+        provenance="asr-loose-script-matched" if beat.get("loose") else "asr-estimated-script-matched"
         if audio.exists() and metadata.exists():
             saved=json.loads(metadata.read_text())
             duration=_duration(audio)
             words=validate_words(text,saved["words"],duration)
+            provenance=saved.get("timing_provenance",provenance)
         else:
             if engine is None:
                 engine=_Synthesizer(reference,model)
@@ -339,8 +343,8 @@ def synthesize_plan(plan: dict, narrator: str, workdir: Path, model: str = "orig
                     stage="transcription"
                     spoken=verifier.transcribe(audio)
                     stage="alignment"
-                    words=_align_script(text,spoken,duration)
-                    metadata.write_text(json.dumps({"words":words,"duration":duration,"model":model,"narrator":narrator,"timing_provenance":"asr-estimated-script-matched"},indent=2))
+                    words=_align_script(text,spoken,duration,loose=bool(beat.get("loose")))
+                    metadata.write_text(json.dumps({"words":words,"duration":duration,"model":model,"narrator":narrator,"timing_provenance":provenance},indent=2))
                     error=None
                     break
                 except (RuntimeError, ValueError) as exc:
@@ -365,7 +369,7 @@ def synthesize_plan(plan: dict, narrator: str, workdir: Path, model: str = "orig
                     },indent=2),encoding="utf-8")
             if error:
                 raise RuntimeError(f"Narration beat {beat.get('id',index)} failed complete-speech verification: {error}") from error
-        beat.update(audio_path=str(audio.resolve()),duration=duration,words=words,timing_provenance="asr-estimated-script-matched")
+        beat.update(audio_path=str(audio.resolve()),duration=duration,words=words,timing_provenance=provenance)
     result["narrator"]=narrator
     result["tts_model"]=model
     return result

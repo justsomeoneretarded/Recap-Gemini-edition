@@ -2,7 +2,6 @@
 import json
 import os
 import hashlib
-from datetime import datetime,timezone
 from pathlib import Path
 from shorts_pipeline.config import DEFAULTS, LOCAL_WRITERS, request_config
 
@@ -67,8 +66,9 @@ if __name__ == '__main__':
                       if k in request}))
     if os.environ.get('GITHUB_ENV'):
         source_code=hashlib.sha256(Path('shorts_pipeline/sources.py').read_bytes()).hexdigest()
-        key=hashlib.sha256(json.dumps([request['source'],request['source_window'],source_code,
-                                     datetime.now(timezone.utc).date().isoformat()]).encode()).hexdigest()
+        # No date in the key: a run stopped by the daily Gemini quota (reset at midnight Pacific, i.e. the next
+        # UTC day) must resume from its cached stages instead of repeating discovery and analysis.
+        key=hashlib.sha256(json.dumps([request['source'],request['source_window'],source_code]).encode()).hexdigest()
         with open(os.environ['GITHUB_ENV'],'a',encoding='utf-8') as stream:
             stream.write(f'SHORTS_SOURCE_CACHE_KEY={key}\n')
             stream.write(f'SHORTS_PLANNER={request["planner"]}\n')
