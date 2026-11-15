@@ -289,3 +289,21 @@ def test_a_well_formed_script_is_kept_with_an_issue_after_three_rule_failures():
     bad["beats"][0]["item_id"] = "I9"
     with pytest.raises(ValueError, match="failed validation after 3 attempts"):
         storyline.write_storyline(ScriptedClient(bad), ctx)
+
+
+def test_only_clean_short_film_lines_are_offered_as_dialogue():
+    def quote(ident, text, start, end, confidence=0.9):
+        return {"id": ident, "start": start, "end": end, "text": text, "confidence": confidence,
+                "words": [{"word": w, "start": 0, "end": 0.1} for w in text.split()], "timing_provenance": "asr"}
+    pool = {"D1": quote("D1", "little run down there John. Ernest I still have time. He's almost up.", 11, 15),
+            "D2": quote("D2", "I still have time.", 12, 13.2),
+            "D3": quote("D3", "Who's gonna know?", 14, 15, confidence=0.5)}
+    ctx = Context(PLAN, POOL, {"events": EVENTS}, pool, {"title": "t", "user_story_notes": "John Wick"},
+                  rate=3.0, target=20)
+    assert [c["speech_id"] for c in ctx.dialogue_clips()] == ["D2"]
+    low, high = ctx.budget
+    data = script_for((low + high) // 2)
+    data["beats"].insert(2, {"kind": "dialogue", "item_id": "I2", "speech_id": "D1", "sentences": []})
+    data["beats"].insert(3, {"kind": "dialogue", "item_id": "I2", "speech_id": "D2", "sentences": []})
+    beats = validate_script(ctx, StorylineScript.model_validate(data))
+    assert [b["speech_id"] for b in beats if b["kind"] == "dialogue"] == ["D2"]

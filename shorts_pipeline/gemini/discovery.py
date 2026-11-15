@@ -42,6 +42,17 @@ REJECT_TITLE = re.compile(
 MIN_VIDEO_SECONDS, MAX_VIDEO_SECONDS = 15, 20 * 60
 HANDLE_SECONDS = 3.0  # Extra footage around each approved segment, so lines can breathe and cuts don't clip action.
 MIN_SEGMENT_SECONDS = 1.5
+# Problems that do not make an official clip unusable: a corner channel logo is cropped out of the
+# square frame, and end screens or title cards are cut by the closer look (run 19 lost 6 of 11 clips).
+HARMLESS_PROBLEM = re.compile(r"(logo|watermark|\bbug\b|end[ _-]?screen|end[ _-]?card|title[ _-]?card|\bintro\b|\boutro\b|branding)", re.I)
+
+
+def usable(result) -> bool:
+    if not result.same_film:
+        return False
+    return result.clean or (bool(result.problems) and all(HARMLESS_PROBLEM.search(p) and not re.search(
+        r"\b(subtitle|caption|narrat|commentary|voice ?over|mirror|flipped|sped|speed|border|picture.in.picture)",
+        p, re.I) for p in result.problems))
 
 
 # ------------------------------------------------------------------ schemas
@@ -88,8 +99,9 @@ class RefinedSegments(BaseModel):
 
 class Screening(BaseModel):
     same_film: bool = Field(description="The footage is from the requested film (not a sequel, remake or parody)")
-    clean: bool = Field(description="No narration over the film, no burned-in captions or commentary, "
-                                    "no large watermark, not mirrored, cropped or sped up")
+    clean: bool = Field(description="No narration over the film, no burned-in subtitles or commentary text, no "
+                                    "borders or picture-in-picture, not mirrored or sped up. A small channel logo in "
+                                    "a corner and end screens are fine")
     problems: list[str] = Field(default_factory=list)
     segments: list[FoundSegment] = Field(default_factory=list)
 
@@ -300,10 +312,11 @@ def screen_video(client: GeminiClient, plan: StoryPlan, video: dict) -> Screenin
               f"This upload: {video['title']} — {video['channel']} ({video['duration']:.0f} s)\n"
               f"Story items: {json.dumps(items)}\n\n"
               "1. Is this footage from the requested film? 2. Is it clean (no narrator talking over the film, no "
-              "burned-in subtitles or commentary text, no large logo, not mirrored, cropped or sped up)? "
+              "burned-in subtitles or commentary text, no borders or picture-in-picture, not mirrored or sped up)? "
+              "A small channel logo in a corner and end screens are fine: they are cropped or cut later. "
               "3. List every segment that clearly shows one of the story items, with start and end in seconds "
-              "and what is visible. Keep segments tight around the action (3-40 s each); split a long scene into "
-              "several segments. Leave out title cards, end screens and anything that matches no item.")
+              "and what is visible. Cover the whole moment, splitting a long scene into segments of up to 60 s. "
+              "Leave out title cards, end screens and anything that matches no item.")
     screening = client.generate("analysis:screen", Screening,
                                 [youtube_part(video["url"], video["duration"], 0.5 if video["duration"] <= 300 else 0.25),
                                  text_part(prompt)],
@@ -317,7 +330,7 @@ def screen_video(client: GeminiClient, plan: StoryPlan, video: dict) -> Screenin
 
 REFINE_SYSTEM = ("You mark exact shot boundaries in a film clip. Report only what is visible, in seconds from the "
                  "start of the whole video. Return JSON matching the schema.")
-MAX_SEGMENT_SECONDS = 30.0
+MAX_SEGMENT_SECONDS = 60.0
 MAX_REFINE_CALLS = 16
 
 
@@ -327,9 +340,10 @@ def refine_segment(client: GeminiClient, item: StoryItem, video: dict, start: fl
     a, b = max(0.0, start - 25), min(duration, end + 25)
     part = {**youtube_part(video["url"], duration, 1.0), "start": round(a, 3), "end": round(b, 3)}
     prompt = (f"Watch {a:.0f}-{b:.0f} s of this video and find the exact moments that show: {item.title} — "
-              f"{item.what_happens}\nReturn 1-4 tight segments of 3-{MAX_SEGMENT_SECONDS:.0f} s each, start and end in "
-              "seconds from the start of the whole video, cut around the visible action. Leave out title cards, "
-              "logos, end screens and unrelated shots. Return no segments if the moment is not there.")
+              f"{item.what_happens}\nReturn 1-3 continuous stretches of 3-{MAX_SEGMENT_SECONDS:.0f} s that together cover the "
+              "whole moment (its build-up, the action and its result), start and end in seconds from the start of "
+              "the whole video. Leave out title cards, end screens and unrelated shots. Return no segments if the "
+              "moment is not there.")
     result = client.generate("analysis:refine", RefinedSegments, [part, text_part(prompt)], system=REFINE_SYSTEM,
                              temperature=0.1, max_output_tokens=4096, resolution="low")
     found = [s for s in result.segments if s.end > s.start]
@@ -437,6 +451,7 @@ def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=No
             screenings[pick.video_id] = result
             report["screened"].append({"video_id": pick.video_id, "title": video["title"], "channel": video["channel"],
                                        "url": video["url"], "same_film": result.same_film, "clean": result.clean,
+                                       "usable": usable(result),
                                        "problems": result.problems, "segments": [s.model_dump() for s in result.segments]})
             save()
 
@@ -445,7 +460,7 @@ def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=No
     def coverage() -> dict[str, list[tuple[str, FoundSegment]]]:
         found: dict[str, list[tuple[str, FoundSegment]]] = {i.item_id: [] for i in plan.items}
         for video_id, result in screenings.items():
-            if result.same_film and result.clean:
+            if usable(result):
                 for seg in result.segments:
                     found[seg.item_id].append((video_id, seg))
         return found
@@ -460,8 +475,11 @@ def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=No
 
     found = coverage()
     target = float(request.get("target_seconds", 100))
-    per_item = min(90.0, max(20.0, 2.2 * target / max(1, len(plan.items))))
-    per_item_segments = 3
+    # Footage per moment from the moments that actually have footage: a 100 s Short over few
+    # covered moments still needs about 2.6x its length in usable footage (run 19 pooled 122 s).
+    covered = sum(1 for i in plan.items if found[i.item_id])
+    per_item = min(90.0, max(25.0, 2.6 * target / max(1, covered)))
+    per_item_segments = 4
     chosen: list[dict] = []
     for item in plan.items:
         spans: list[tuple[float, float]] = []

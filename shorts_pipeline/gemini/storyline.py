@@ -131,6 +131,17 @@ STRUCTURE = (
 
 
 # ------------------------------------------------------------------ inputs
+def clean_quote(q: dict) -> bool:
+    """A film line worth playing: confidently heard, short, one speaker, a complete utterance.
+    Run 19 played 'little run down there John. Ernest I still have time.' (two speakers, cut mid-word)."""
+    text = " ".join(str(q.get("text", "")).split())
+    words = count_words(text)
+    seconds = float(q.get("end", 0)) - float(q.get("start", 0))
+    return (float(q.get("confidence", 0)) >= 0.85 and 2 <= words <= 14 and 0.6 <= seconds <= 5.0
+            and text[:1].isupper() and bool(re.search(r"[.!?]['\"”’]?$", text))
+            and len(re.findall(r"[.!?](?=\s)", text)) <= 1)
+
+
 def load_discovery(directory: Path) -> tuple[dict, list[dict]]:
     directory = Path(directory)
     plan = json.loads((directory / "story-plan.json").read_text(encoding="utf-8"))
@@ -213,6 +224,8 @@ class Context:
     def dialogue_clips(self) -> list[dict]:
         clips = []
         for q in self.speech_pool.values():
+            if not clean_quote(q):
+                continue
             item = self.item_of((q["start"] + q["end"]) / 2)
             if item:
                 clips.append({"speech_id": q["id"], "item_id": item, "start": round(q["start"], 2),
@@ -292,7 +305,7 @@ def validate_script(ctx: Context, script: StorylineScript, *, budget: bool = Tru
             raise ValueError(f"beat uses item_id {raw.item_id!r}; use one of {sorted(known)} (items with footage)")
         if raw.kind == "dialogue":
             quote = ctx.speech_pool.get(raw.speech_id)
-            if not quote or raw.speech_id in used or dialogue >= MAX_DIALOGUE:
+            if not quote or not clean_quote(quote) or raw.speech_id in used or dialogue >= MAX_DIALOGUE:
                 continue  # An unknown, repeated or extra dialogue clip is dropped, not fatal.
             used.add(raw.speech_id)
             dialogue += 1
