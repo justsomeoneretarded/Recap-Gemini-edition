@@ -23,7 +23,8 @@ from pydantic import BaseModel, Field
 from .client import text_part, video_part
 
 MAX_CUT = 2.2        # Seconds on screen for one shot.
-FAST_CUT = 3.0       # Allowed for a fast, high-intensity shot that keeps moving.
+FAST_CUT = 2.6       # Allowed for a fast, high-intensity shot that keeps moving.
+HARD_MAX = 3.0       # No cut is ever held longer, even to avoid a sliver.
 MIN_CUT = 0.6        # Shorter pieces would flash; the previous piece is held instead.
 MIN_SHOT = 0.5       # Catalog shots shorter than this are dropped.
 LABEL_BATCH = 45     # Shots per labelling request.
@@ -128,17 +129,37 @@ class Footage:
             self.free[sid] = out
 
     def take(self, sid: str, length: float) -> tuple[float, float] | None:
-        """A window of `length` (or the longest free part) of this shot, centred on its peak."""
+        """A window of `length` (or the longest free part) of this shot, centred on its peak.
+        Times stay unrounded until output: run 21 rounded a sliver to zero length and looped."""
         parts = [p for p in self.free.get(sid, []) if p[1] - p[0] >= MIN_CUT]
-        if not parts:
+        if not parts or length <= 0:
             return None
         peak = self.shots[sid]["peak"]
         a, b = min(parts, key=lambda p: (0 if p[0] <= peak <= p[1] else 1, -(p[1] - p[0])))
         length = min(length, b - a)
         start = min(max(peak - length / 2, a), b - length)
-        window = (round(start, 3), round(start + length, 3))
+        window = (start, start + length)
         self.reserve(*window)
         return window
+
+    def grow(self, entry: list, extra: float) -> float:
+        """Lengthen a placed window [sid, a, b] into free footage right next to it, inside its shot."""
+        sid, a, b = entry
+        extra = min(extra, max(0.0, HARD_MAX - (b - a)))
+        if extra <= 0:
+            return 0.0
+        for pa, pb in self.free.get(sid, []):
+            if abs(pa - b) < 1e-6:
+                gain = min(extra, pb - pa)
+                self.reserve(b, b + gain)
+                entry[2] = b + gain
+                return gain
+            if abs(pb - a) < 1e-6:
+                gain = min(extra, pb - pa)
+                self.reserve(a - gain, a)
+                entry[1] = a - gain
+                return gain
+        return 0.0
 
     def candidates(self, item: str, near: float, *, fill: bool) -> list[str]:
         """Shots to fill with: this item's unused shots, closest in time and most intense first."""
@@ -182,43 +203,67 @@ def cue_times(sentence: dict, words: list[dict], span: tuple[float, float], beat
 
 def place_sentence(footage: Footage, item: str, cited: list[str], cuts: list[float], duration: float,
                    sentence_index: int, sentence_id: str) -> tuple[list[dict], list[str]]:
-    """Shots for one sentence: each cited shot from its cue, gaps filled so no cut exceeds MAX_CUT."""
-    plan = []  # (sid, seconds)
-    bounds = [min(t, duration) for t in cuts] + [duration]
-    notes = []
+    """Shots for one sentence: each cited shot from its cue, gaps filled so no cut exceeds MAX_CUT.
+
+    Never fails: when the pool is spent, the last shot is held longer (the renderer may slow it to
+    0.85x) and, as a last resort, a shot is shown again; both are noted.
+    """
+    plan: list[list] = []  # [sid, start, end]
+    bounds = [min(max(t, 0.0), duration) for t in cuts] + [duration]
+    notes: list[str] = []
+    residue = 0.0
     for index, sid in enumerate(cited):
-        segment = bounds[index + 1] - bounds[index]
+        segment = bounds[index + 1] - bounds[index] + residue
+        residue = 0.0
         if segment < MIN_CUT and plan:
-            plan[-1] = (plan[-1][0], plan[-1][1] + max(0.0, segment))
+            residue = segment - footage.grow(plan[-1], segment)
             continue
-        current = sid
-        while segment > 1e-6:
+        current, steps = sid, 0
+        while segment > 0.04 and steps < 60:
+            steps += 1
             shot = footage.shots[current]
             cap = FAST_CUT if shot["motion"] == "fast" and shot["intensity"] >= 4 else MAX_CUT
             piece = min(segment, cap)
             if segment - piece < MIN_CUT:  # Never leave a sliver: hold a little longer, or split evenly.
-                piece = segment if segment <= cap + 0.4 else segment / 2
+                piece = segment if segment <= min(cap + 0.4, HARD_MAX) else segment / 2
             window = footage.take(current, piece)
-            if window is None or window[1] - window[0] < min(piece, MIN_CUT):
-                window = None
             if window is not None:
-                plan.append((current, window))
+                plan.append([current, window[0], window[1]])
                 segment -= window[1] - window[0]
-            nxt = [c for c in footage.candidates(item, footage.shots[current]["peak"], fill=False) if c != current]
+            if segment <= 0.04:
+                break
+            nxt = [c for c in footage.candidates(item, shot["peak"], fill=False) if c != current]
             if not nxt:
-                nxt = [c for c in footage.candidates(item, footage.shots[current]["peak"], fill=True) if c != current]
+                nxt = [c for c in footage.candidates(item, shot["peak"], fill=True) if c != current]
                 if nxt:
-                    notes.append("filler shown: the item ran out of action shots")
-            if segment > 1e-6 and not nxt:
-                if window is None:
-                    raise ValueError(f"the footage pool is exhausted at {sentence_id}")
-                continue
-            if segment > 1e-6:
+                    notes.append("filler shown: the moment ran out of action shots")
+            if nxt:
                 current = nxt[0]
+            elif window is None:
+                break  # Nothing left anywhere.
+        residue = max(0.0, segment)
+    if residue > 0.04 and plan:
+        residue -= footage.grow(plan[-1], residue)
+    if residue > 0.04 and plan:
+        # The pool is spent: show the strongest of this sentence's shots again, peak-centred.
+        notes.append(f"repeated footage for {residue:.2f}s: the pool ran out")
+        turn = 0
+        while residue > 0.04:
+            shot = footage.shots[cited[turn % len(cited)]]
+            turn += 1
+            piece = min(residue, MAX_CUT, shot["end"] - shot["start"])
+            start = min(max(shot["peak"] - piece / 2, shot["start"]), shot["end"] - piece)
+            plan.append([shot["shot_id"], start, start + piece])
+            residue -= piece
+    if not plan:  # Not even the cited shot was free: show it anyway.
+        shot = footage.shots[cited[0]]
+        piece = min(duration, shot["end"] - shot["start"])
+        plan.append([cited[0], shot["start"], shot["start"] + piece])
+        notes.append("cited shot shown again: no free footage was left")
     placed = []
-    for n, (sid, (a, b)) in enumerate(plan):
+    for sid, a, b in plan:
         shot = footage.shots[sid]
-        placed.append({"start": a, "end": b, "anchor": round(min(max(shot["peak"], a), b), 3),
+        placed.append({"start": round(a, 3), "end": round(b, 3), "anchor": round(min(max(shot["peak"], a), b), 3),
                        "focus_x": float(shot.get("focus_x", 0.5)), "sentence_index": sentence_index,
                        "sentence_id": sentence_id, "shot_id": sid, "event_id": "", "shows": shot.get("visible", ""),
                        "reason": "cited by the narration" if sid in cited else
