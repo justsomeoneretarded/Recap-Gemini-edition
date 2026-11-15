@@ -79,13 +79,15 @@ Put **`discover`** (or `discover:John Wick (2014)` to name the film) in **Source
 1. Gemini lists the film's famous or action moments in story order, plus the connected moments the story needs around each one, with broad YouTube searches for each (no trailers).
 2. The searches run on YouTube. Only metadata is read, and uploads titled as trailers, recaps, reactions, reviews or edits are dropped.
 3. Gemini picks the likeliest uploads, then **watches each one from its link without downloading it**. It marks the segments that show a story item and rejects the wrong film or unclean footage: narration over the film, burned-in captions, logos, or mirrored or sped-up copies.
-4. Must-have moments with no footage get a second search round.
+4. Moments with no clean footage get a second search round. If an upload's only fault is burned-in subtitles, it is used as a last resort for a moment with no clean footage, cropped above the subtitles.
 5. Only the approved segments are downloaded, with 3 seconds extra on each side (never reaching into a neighbouring segment of the same upload). They are joined in story order into one footage pool.
 6. **Story-first production** (`shorts_pipeline/gemini/storyline.py`). Discovered footage does not go through the generic sentence-by-sentence matcher:
    - The story is written from the discovery plan. It opens cold on the most gripping moment, then gives the premise (who the hero is, what he did, why he is hunted), then the remaining moments as a cause-and-effect chain, and ends on a payoff or the renewed threat.
    - The writer gets opening excerpts from two reference recaps about other films as style examples.
-   - A story editor scores the script, and a weak script is rewritten once.
-   - Each sentence plays over continuous footage of its own story moment, and the moment it narrates lands on its key word.
+   - A story editor scores the script, and a weak script is rewritten once. The editor's beat notes then become targeted rewrites: factual errors about the film first, up to three beats.
+   - Every beat except the premise narrates its own story moment.
+   - Every shot of the found footage is logged by Gemini (what is visible, intensity, filler or not). Each sentence cites the shots that show what it says. Each shot cuts in on the words it illustrates and stays on screen for at most 2.2 seconds. Gaps are filled with the same moment's next best shots, and filler never plays. The reference recaps also cut about every 1.5–2 seconds.
+   - A deterministic check and the story editor's "impact" score reject AI-sounding narration (stock phrases, piled-up adjectives).
    - A Short that is too long or too short is fixed by rewriting whole beats. Sentences are never deleted.
    - A final Gemini check flags narration that contradicts the picture.
 

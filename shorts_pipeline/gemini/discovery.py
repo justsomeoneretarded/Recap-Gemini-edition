@@ -47,6 +47,21 @@ MIN_SEGMENT_SECONDS = 1.5
 HARMLESS_PROBLEM = re.compile(r"(logo|watermark|\bbug\b|end[ _-]?screen|end[ _-]?card|title[ _-]?card|\bintro\b|\boutro\b|branding)", re.I)
 
 
+SUBTITLE_PROBLEM = re.compile(r"subtitle|caption", re.I)
+SUBTITLE_KEEP = 0.8  # Burned-in subtitles sit in the bottom of the frame; keep the top 80% of the picture.
+
+
+def subtitled_only(result) -> bool:
+    """Film footage whose only real fault is burned-in subtitles: a last resort, cropped above them
+    (run 20 had no footage of the finger cut because its only upload was subtitled)."""
+    if not result.same_film or not result.problems:
+        return False
+    return any(SUBTITLE_PROBLEM.search(p) for p in result.problems) and all(
+        SUBTITLE_PROBLEM.search(p) or HARMLESS_PROBLEM.search(p) for p in result.problems) and not any(
+        re.search(r"narrat|commentary|voice ?over|mirror|flipped|sped|speed|border|picture.in.picture", p, re.I)
+        for p in result.problems)
+
+
 def usable(result) -> bool:
     if not result.same_film:
         return False
@@ -247,10 +262,12 @@ def detect_crop(path: Path) -> str | None:
     return None
 
 
-def normalize_segment(source: Path, target: Path) -> Path:
-    """One format for every pooled clip: black bars removed, 1920x1080, 30 fps, H.264 + 48 kHz stereo AAC."""
+def normalize_segment(source: Path, target: Path, *, subtitle_band: bool = False) -> Path:
+    """One format for every pooled clip: black bars removed, 1920x1080, 30 fps, H.264 + 48 kHz stereo AAC.
+    With subtitle_band, the bottom of the picture (burned-in subtitles) is cropped away first."""
     crop = detect_crop(source)
-    video = ((crop + "," if crop else "") + "scale=1920:1080:force_original_aspect_ratio=increase,"
+    band = f"crop=iw:trunc(ih*{SUBTITLE_KEEP}/2)*2:0:0," if subtitle_band else ""
+    video = ((crop + "," if crop else "") + band + "scale=1920:1080:force_original_aspect_ratio=increase,"
              "crop=1920:1080,setsar=1,fps=30,format=yuv420p")
     args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source)]
     if _has_audio(source):
@@ -287,7 +304,8 @@ def plan_story(client: GeminiClient, request: dict, film: str) -> StoryPlan:
               "For every item give 3-6 broad YouTube searches, short and varied, the way people title uploads "
               "(for example 'john wick car', 'john wick garage fight', 'john wick 2014 ending'). "
               "Do not search for trailers. Do not end every query with 'scene'. Mark must_have only for "
-              "moments the story cannot do without, always including the setup and the ending.")
+              "moments the story cannot do without, always including the setup, the single most shocking moment "
+              "(the best cold open) and the ending.")
     return client.generate("planning:story_items", StoryPlan, [text_part(prompt)], system=PLAN_SYSTEM,
                            temperature=0.4, max_output_tokens=8192)
 
@@ -463,9 +481,21 @@ def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=No
             if usable(result):
                 for seg in result.segments:
                     found[seg.item_id].append((video_id, seg))
+        # Last resort for a moment with no clean footage: subtitled film footage, cropped above the subtitles.
+        clean = {k for k, v in found.items() if v}
+        for video_id, result in screenings.items():
+            if subtitled_only(result):
+                for seg in result.segments:
+                    if seg.item_id not in clean:
+                        found[seg.item_id].append((video_id, seg))
         return found
 
-    missing = [i for i in plan.items if i.must_have and not coverage()[i.item_id]]
+    def subtitled(video_id: str) -> bool:
+        return not usable(screenings[video_id]) and subtitled_only(screenings[video_id])
+
+    # Every moment without clean footage gets one more search round (must-have first, at most four).
+    uncovered = [i for i in plan.items if not any(not subtitled(v) for v, _ in coverage()[i.item_id])]
+    missing = sorted(uncovered, key=lambda i: not i.must_have)[:4]
     if missing:
         log(f"Discovery: searching again for {', '.join(i.title for i in missing)}")
         run_searches([q for item in missing for q in item.queries[2:]])
@@ -490,7 +520,8 @@ def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=No
                 continue
             chosen.append({"item_id": item.item_id, "item_title": item.title, "video_id": video_id,
                            "url": candidates[video_id]["url"], "title": candidates[video_id]["title"],
-                           "start": seg.start, "end": seg.end, "shows": seg.shows, "confidence": seg.confidence})
+                           "start": seg.start, "end": seg.end, "shows": seg.shows, "confidence": seg.confidence,
+                           "subtitled": subtitled(video_id)})
             spans.append((seg.start, seg.end))
     # Closer look at each chosen stretch: screening at a frame every 2-4 s gives rough, often whole-clip spans.
     items = {i.item_id: i for i in plan.items}
@@ -545,13 +576,13 @@ def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=No
     for index, c in enumerate(chosen):
         a, b = handle_range(c, chosen, candidates[c["video_id"]]["duration"] or (c["end"] + HANDLE_SECONDS))
         raw = clips_dir / f"{c['video_id']}-{a:.1f}-{b:.1f}.mp4"
-        norm = clips_dir / f"{c['video_id']}-{a:.1f}-{b:.1f}-norm.mp4"
+        norm = clips_dir / f"{c['video_id']}-{a:.1f}-{b:.1f}-{'sub' if c.get('subtitled') else 'norm'}.mp4"
         try:
             if not norm.is_file():
                 if not raw.is_file():
                     log(f"Discovery: downloading {c['item_title']} ({a:.0f}-{b:.0f}s of {c['video_id']})")
                     download(c["url"], a, b, raw)
-                normalize_segment(raw, norm)
+                normalize_segment(raw, norm, subtitle_band=bool(c.get("subtitled")))
             c.update(downloaded_start=a, downloaded_end=b, file=str(norm))
             pooled.append(c)
         except Exception as exc:  # noqa: BLE001 - recorded; other segments may still work

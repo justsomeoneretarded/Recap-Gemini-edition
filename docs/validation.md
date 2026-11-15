@@ -109,3 +109,19 @@ Offline tests (`tests/test_gemini_storyline.py`) check:
 
 Not yet verified live: the quality of Gemini's story script, critique and visual check on a real run.
 
+Added after run 20 (86 s, no deleted lines, but no cold open and some beats off their footage):
+- subtitled uploads are used only as a cropped last resort for a moment with no clean footage;
+- a beat other than the premise must narrate its own item's moment;
+- the editor's beat notes trigger targeted rewrites, factual errors first.
+
+Each has an offline test.
+
+Added after the user's review of run 20: in run 20, one continuous window per sentence (median 4.2 s, one stretch with no cut for 17 s) put filler on screen and let the words drift from the picture. Discovered footage is now cut at the shot level (`gemini/shots.py`):
+- a labelled shot catalog;
+- shots cited per sentence, with word cues;
+- at most 2.2 s per cut;
+- filler excluded;
+- an AI-slop check.
+
+Offline tests cover cue timing, cut length, no reuse of footage, filler exclusion and own-item shots.
+
