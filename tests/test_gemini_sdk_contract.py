@@ -8,11 +8,12 @@ from google.genai import types  # noqa: E402
 
 from shorts_pipeline.gemini import schemas  # noqa: E402
 from shorts_pipeline.gemini.client import SdkTransport  # noqa: E402
-from shorts_pipeline.gemini import discovery  # noqa: E402
+from shorts_pipeline.gemini import discovery, storyline  # noqa: E402
 
 ALL = [schemas.WindowAnalysis, schemas.VerificationResult, schemas.StoryMap, schemas.EditorialPlan,
        schemas.ScriptDraft, schemas.ScriptRevision, schemas.BeatRewrite, schemas.MatchingResult, schemas.QualityReview,
-       discovery.StoryPlan, discovery.CandidateRanking, discovery.Screening, discovery.RefinedSegments]
+       discovery.StoryPlan, discovery.CandidateRanking, discovery.Screening, discovery.RefinedSegments,
+       storyline.StorylineScript, storyline.StoryCritique, storyline.BeatText, storyline.VisualCheck]
 
 
 @pytest.mark.parametrize("schema", ALL, ids=lambda s: s.__name__)

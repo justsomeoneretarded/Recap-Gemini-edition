@@ -165,13 +165,13 @@ def test_refine_shifts_window_relative_times_and_caps_long_spans(tmp_path, monke
         def generate(self, model, parts, *, system, schema, **config):
             # Answers counted from the start of the 75-155 s window, one span far too long.
             return self._ok({"segments": [{"item_id": "x", "start": 5, "end": 12, "shows": "s", "confidence": 0.9},
-                                          {"item_id": "x", "start": 10, "end": 58, "shows": "l", "confidence": 0.7}]})
+                                          {"item_id": "x", "start": 10, "end": 80, "shows": "l", "confidence": 0.7}]})
 
     client = GeminiClient(settings_from_request({"gemini_preset": "free"}), CostLedger(5.0, None), tmp_path,
                           Window(), sleep=lambda s: None)
     item = discovery.StoryItem(item_id="I1", title="t", what_happens="w", must_have=True, queries=["q"])
     found = discovery.refine_segment(client, item, {"url": "https://youtu.be/v", "duration": 300}, 100, 130)
-    assert [(s.item_id, s.start, s.end) for s in found] == [("I1", 80, 87), ("I1", 94, 124)]
+    assert [(s.item_id, s.start, s.end) for s in found] == [("I1", 80, 87), ("I1", 90, 150)]  # 70 s capped to 60 s
 
 
 def test_black_bars_are_cropped_from_widescreen_clips(tmp_path):
@@ -182,3 +182,14 @@ def test_black_bars_are_cropped_from_widescreen_clips(tmp_path):
     crop = discovery.detect_crop(letterboxed)
     assert crop and crop.startswith("crop=640:27")
     assert discovery.detect_crop(make_source(tmp_path / "full.mp4", 8)) is None
+
+
+def test_a_corner_logo_or_end_screen_does_not_reject_an_official_clip():
+    def screening(clean, problems, same=True):
+        return discovery.Screening(same_film=same, clean=clean, problems=problems)
+    assert discovery.usable(screening(False, ["The video contains a persistent 'B' logo watermark in the top left corner."]))
+    assert discovery.usable(screening(False, ["watermark", "end_screen"]))
+    assert not discovery.usable(screening(False, ["burned-in subtitles"]))
+    assert not discovery.usable(screening(False, ["watermark", "narration over the film"]))
+    assert not discovery.usable(screening(False, []))
+    assert not discovery.usable(screening(True, [], same=False))

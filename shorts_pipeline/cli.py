@@ -36,6 +36,7 @@ def generate(request: dict, workdir: Path, outdir: Path, *, gemini_transport=Non
             stage('discover footage')
             pool,pool_notes = discover_footage(request,workdir,outdir,transport=gemini_transport)
             request = {**request,'source':str(pool),'discovered_from':request['source'],
+                       'discovery_dir':str(Path(pool).parent),'user_story_notes':request.get('story_notes',''),
                        'story_notes':(request.get('story_notes','')+'\n\n'+pool_notes).strip()}
         stage('source')
         source = resolve_source(request['source'],workdir)
@@ -64,9 +65,13 @@ def generate(request: dict, workdir: Path, outdir: Path, *, gemini_transport=Non
             if request['planner']=='gemini':
                 from .gemini.client import GeminiError
                 from .gemini.pipeline import run_gemini_pipeline
+                from .gemini.storyline import run_storyline_pipeline
                 stage('gemini production')
+                # Discovered footage keeps its story structure: narrate the story items over their own footage.
+                production = (run_storyline_pipeline if request.get('discovery_dir') and not request.get('source_window')
+                              else run_gemini_pipeline)
                 try:
-                    plan,gemini_run = run_gemini_pipeline(request,source,source_info['duration'],workdir,outdir,
+                    plan,gemini_run = production(request,source,source_info['duration'],workdir,outdir,
                         scenes=scenes,speech=speech,transport=gemini_transport,synthesize=synthesize)
                     status['review_status']=plan['planning']['review_status']
                 except GeminiError as exc:

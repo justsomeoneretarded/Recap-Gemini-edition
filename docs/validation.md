@@ -93,3 +93,19 @@ Recommended first live check: run **Gemini Live Check**, then Generate Shorts wi
 - the error that lists approved links when downloads are blocked.
 
 YouTube search and download, and Gemini watching YouTube links, had not been exercised live when this was written. YouTube search was blocked by the development sandbox's network proxy.
+
+## Story-first production for discovered footage (14 November 2026)
+
+`shorts_pipeline/gemini/storyline.py` replaces stages B–I for `source: discover`. Run 18 showed that the generic path broke the story apart. It deleted 12 of 32 sentences because each one had to be covered by its own matched shots, and the premise sentence was lost in the merge.
+
+Offline tests (`tests/test_gemini_storyline.py`) check:
+- the script rules: no dialogue first, no frame-by-frame runs, the hero named in the opening, word budgets per item, unknown items rejected;
+- style examples never taken from a reference about the same film;
+- continuous, non-overlapping placement inside each sentence's own item, with neighbouring footage borrowed only when an item is spent, and no sentence removed;
+- one editor-driven rewrite for a weak script;
+- a visual contradiction fixed by a beat rewrite;
+- overlong narration fixed by whole-beat rewrites;
+- an end-to-end render.
+
+Not yet verified live: the quality of Gemini's story script, critique and visual check on a real run.
+
