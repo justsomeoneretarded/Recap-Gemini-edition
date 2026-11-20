@@ -633,6 +633,12 @@ def run_storyline_pipeline(request: dict, source: Path, source_duration: float, 
               transport=transport, synthesize=synthesize, log=log, sleep=sleep)
     plan, pool_map = load_discovery(Path(request["discovery_dir"]))
     log("Gemini: checking API key and model availability")
+    # The script is the product: never let a Flash-Lite fallback write or judge it (run 22's Lite script was
+    # filler). When the stronger models' free quota is spent the run stops, cached, and resumes after the reset.
+    for stage in ("writing", "planning"):
+        strong = [m for m in run.settings.model_preferences[stage] if "lite" not in m]
+        if strong:
+            run.settings.model_preferences[stage] = strong
     models = run.client.resolve_models()
     _write_json(outdir / "gemini-settings.json", {**run.settings.to_json(), "path": "storyline"})
     source_key = _key(str(source), source_duration, [(s["id"], s["start"], s["end"]) for s in scenes])
@@ -731,10 +737,10 @@ def run_storyline_pipeline(request: dict, source: Path, source_duration: float, 
         issues.append({"check": "pacing", "severity": "major", "description": "frame-by-frame narration remains",
                        "origin": "deterministic"})
     cuts = [x["end"] - x["start"] for b in beats if b["kind"] == "narration" for x in b["shots"]]
-    long_cuts = sum(1 for c in cuts if c > MAX_CUT + 0.45)
+    long_cuts = sum(1 for c in cuts if c > MAX_CUT + 0.05)
     if long_cuts:
         issues.append({"check": "cut_length", "severity": "minor", "origin": "deterministic",
-                       "description": f"{long_cuts} cut(s) longer than {MAX_CUT + 0.45:.1f}s"})
+                       "description": f"{long_cuts} cut(s) longer than {MAX_CUT + 0.05:.2f}s"})
     borrowed = [e["sentence_id"] for e in evidence if any(x["reason"] == "neighbouring story moment"
                                                           for x in e["shots"])]
     total = sum(b["duration"] for b in beats)
