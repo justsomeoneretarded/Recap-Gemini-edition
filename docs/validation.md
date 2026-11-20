@@ -138,3 +138,15 @@ Run 22 failed after 50 minutes on a voice check, not a voice failure.
   - The story checks reject generic tacked-on reasons and a pile-up of "because" (more than one sentence in five).
   - The saved-work cache key no longer contains the date. A run stopped by the daily quota resets at midnight Pacific, which is the next UTC day, so a dated key would make the rerun repeat discovery and shot labelling.
 - **Covered by tests:** `tests/test_gemini_storyline.py` (speech rewrite, loose fallback, hollow reasons) and `tests/test_voice_captions.py` (run 22's real mishearing; a skipped word is still rejected).
+
+### Cut length and the script writer (20 November 2026)
+- **Cut length:** a normal cut lasts at most 2.0 s. A gap that would leave a sliver is split evenly rather than stretched. Only fast, high-intensity shots may run to 2.6 s, and nothing exceeds 3.0 s.
+- **Replay on real data:** placement was replayed on the real shot catalogs and scripts of runs 21 and 22, with even word timings at 3.5 words/s:
+
+  | Script | Cuts | Median | Longest | Cuts over 2.0 s | Filler shown |
+  |---|---|---|---|---|---|
+  | Run 21 | 69 | 1.28 s | 2.34 s | all fast shots | none |
+  | Run 22 | 58 | 1.20 s | 2.57 s | all fast shots | none |
+
+- **Script writer:** Flash-Lite no longer writes or judges the script on the story path. When the Flash quota is spent, the run stops with a resumable message, and its finished stages stay cached for the rerun after the reset. Shot labelling may still use Lite.
+- **Not yet verified:** no full run has been made with these rules yet.

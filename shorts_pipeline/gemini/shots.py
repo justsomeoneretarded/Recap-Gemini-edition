@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from .client import text_part, video_part
 
-MAX_CUT = 2.2        # Seconds on screen for one shot.
+MAX_CUT = 2.0        # Seconds on screen for one shot (the reference Shorts cut every ~1.5-2 s).
 FAST_CUT = 2.6       # Allowed for a fast, high-intensity shot that keeps moving.
 HARD_MAX = 3.0       # No cut is ever held longer, even to avoid a sliver.
 MIN_CUT = 0.6        # Shorter pieces would flash; the previous piece is held instead.
@@ -224,8 +224,8 @@ def place_sentence(footage: Footage, item: str, cited: list[str], cuts: list[flo
             shot = footage.shots[current]
             cap = FAST_CUT if shot["motion"] == "fast" and shot["intensity"] >= 4 else MAX_CUT
             piece = min(segment, cap)
-            if segment - piece < MIN_CUT:  # Never leave a sliver: hold a little longer, or split evenly.
-                piece = segment if segment <= min(cap + 0.4, HARD_MAX) else segment / 2
+            if segment - piece < MIN_CUT:  # Never leave a sliver, never exceed the cap: split evenly.
+                piece = segment if segment <= cap else segment / 2
             window = footage.take(current, piece)
             if window is not None:
                 plan.append([current, window[0], window[1]])

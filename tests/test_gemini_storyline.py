@@ -196,7 +196,7 @@ def test_every_sentence_cuts_to_its_cited_shots_at_most_every_two_seconds_and_no
             assert mine[0]["shot_id"] == first
             assert SHOTS[first]["start"] - 1e-6 <= mine[0]["start"] and mine[0]["end"] <= SHOTS[first]["end"] + 1e-6
         for shot in beat["shots"]:
-            assert shot["end"] - shot["start"] <= storyline.MAX_CUT + 0.41  # Fast cutting.
+            assert shot["end"] - shot["start"] <= storyline.MAX_CUT + 0.01  # Fast cutting.
             assert not SHOTS[shot["shot_id"]]["filler"]  # Filler never plays while other shots are left.
             windows.append((shot["start"], shot["end"]))
     windows.sort()
@@ -261,7 +261,7 @@ def test_discovered_footage_is_narrated_as_a_story_over_its_own_footage(discover
     assert len(evidence["sentences"]) == sum(len(b["sentences"]) for b in timeline["beats"] if b["kind"] == "narration")
     quality = json.loads((out / "quality-review.json").read_text())
     assert quality["path"] == "storyline" and quality["story_critique"][0]["hook"] == 5
-    assert quality["cuts"]["longest_seconds"] <= storyline.MAX_CUT + 0.41 and quality["cuts"]["count"] >= 8
+    assert quality["cuts"]["longest_seconds"] <= storyline.MAX_CUT + 0.01 and quality["cuts"]["count"] >= 8
     catalog = json.loads((out / "shot-catalog.json").read_text())
     assert catalog["I1-004"]["filler"] and not any(x["shot_id"] == "I1-004" for b in timeline["beats"]
                                                    for x in b.get("shots", []) if "shot_id" in x)
@@ -432,3 +432,17 @@ def test_generic_tacked_on_reasons_are_slop():
     many = [f"John runs to the car because the man {n} called." for n in range(5)] + ["He drives."] * 5
     assert any("'because' in" in f for f in slop(many))
     assert not slop(["Ernest corners John between the stacks, so John grabs the only weapon in reach: a book."])
+
+
+def test_flash_lite_never_writes_the_script_the_run_stops_resumable_instead(discovered):
+    """Run 22: every key's Flash quota was spent, Flash-Lite wrote the script, and it was filler."""
+    from gemini_fakes import FakeAPIError
+    daily = "Quota exceeded: GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+    fake = transport()
+    fake.models = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
+    fake.overrides["StorylineScript"] = lambda parts: FakeAPIError("rate_limit", daily)
+    with pytest.raises(Exception, match="rerun after the quota resets"):
+        generate(_request(gemini_preset="free"), discovered / "work", discovered / "out", gemini_transport=fake,
+                 synthesize=FakeSynth(3.0))
+    written = [c["model"] for c in fake.calls if c["schema"] == "StorylineScript"]
+    assert written and not any("lite" in m for m in written)
