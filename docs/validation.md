@@ -150,3 +150,9 @@ Run 22 failed after 50 minutes on a voice check, not a voice failure.
 
 - **Script writer:** Flash-Lite no longer writes or judges the script on the story path. When the Flash quota is spent, the run stops with a resumable message, and its finished stages stay cached for the rerun after the reset. Shot labelling may still use Lite.
 - **Not yet verified:** no full run has been made with these rules yet.
+
+### Run 23 render fix (20 November 2026)
+Run 23 wrote the strongest script so far. The story editor scored it 5 on everything except impact, which got 4. Its 72 cuts had a median of 1.20 s, and only Flash models wrote it. The run then stopped at render with "Selected footage cannot cover the narration within source frame bounds".
+- **Cause:** the renderer trimmed each shot to whole frames, rounding down. With about 8 short cuts per beat, that lost up to one frame per cut, so beats N01, N02 and N04 were 3–4 frames short.
+- **Fix:** the renderer now trims only when the whole-frame capacities still cover the narration. Otherwise it keeps every full span.
+- **Check on run 23's timeline:** all 8 beats now allocate. The slowest plays at 0.988× speed. Nothing loops and no shot is dropped.

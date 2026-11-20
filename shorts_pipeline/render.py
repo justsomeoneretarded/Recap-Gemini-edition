@@ -120,7 +120,11 @@ def allocate_shots(shots: list[dict], duration: float, source_duration: float, f
     speed = min(1., available / target)
     if speed < .85 - 1e-6:
         raise ValueError(f"Only {available:.2f}s of selected footage for {duration:.2f}s narration; add source shots (minimum speed 0.85)")
-    trimming = available > target + 1e-7
+    # Trim only when whole-frame capacities can still cover the narration: with many short cuts, flooring
+    # each span loses up to a frame per shot (run 23: 7-8 cuts left a beat 3-4 frames short). Otherwise keep
+    # every full span; its frame ceilings always cover the target.
+    trimming = (available > target + 1e-7
+                and sum(math.floor(span * fps + 1e-7) for span in spans) >= target_frames)
     # Full source spans in the slowdown case can end between output frames.
     # Their ceilings represent normal frame quantization, not repeated clips.
     capacities = [(math.floor(span * fps + 1e-7) if trimming else

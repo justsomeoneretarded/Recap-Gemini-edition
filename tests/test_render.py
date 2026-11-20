@@ -1,3 +1,4 @@
+import math
 """Small synthetic media tests. Fixtures contain tones, not generated narration."""
 from pathlib import Path
 from array import array
@@ -215,3 +216,19 @@ def test_short_looping_music_is_bounded_by_the_actual_edit(tmp_path):
     assert sum(abs(sample) for sample in end_samples)/len(end_samples)>500
     tail_frequency=sum(a<0<=b for a,b in zip(end_samples,end_samples[1:]))/(len(end_samples)/8000)
     assert 650<tail_frequency<750
+
+
+def test_many_short_cuts_never_fall_short_of_the_frame_budget():
+    """Run 23: 7 cuts covered 8.294 s of narration exactly, but flooring each cut to whole frames left the beat
+    3-4 frames short and the render stopped. Full spans are kept instead; nothing loops, nothing is dropped."""
+    from shorts_pipeline.render import allocate_shots
+    # 2.033 s of footage for 2.0 s of narration, yet whole frames per cut add up to 59 of the 60 needed.
+    spans = [0.6666, 0.6666, 0.7]
+    shots = [{"start": 10.0 * i, "end": 10.0 * i + span, "focus_x": .5, "trim_mode": "start"}
+             for i, span in enumerate(spans)]
+    allocated = allocate_shots(shots, 2.0, 600.0, 30)
+    assert sum(s["frames"] for s in allocated) == 60
+    assert all(s["frames"] >= 1 and s["start"] >= s["source_start"] and s["end"] <= s["source_end"] + 1e-9
+               for s in allocated)
+    with pytest.raises(ValueError, match="add source shots"):
+        allocate_shots(shots[:2], 2.0, 600.0, 30)  # Footage really missing still fails.
