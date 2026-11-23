@@ -281,7 +281,8 @@ SLOP_PHRASES = ("little does he know", "little did he know", "in a world where",
                 "in a twist of fate", "fate has other plans", "one thing is certain", "only time will tell",
                 "showdown of", "against all odds", "all-out war", "takes matters into his own hands",
                 "total war", "high-stakes", "high stakes", "only option", "no other choice", "no choice but",
-                "survival is", "survival requires", "absolutely", "every single", "at all costs")
+                "survival is", "survival requires", "absolutely", "every single", "at all costs",
+                "clears a path", "path to survive", "reckoning", "lethal weapon", "wrath", "cash in", "sacred marker")
 SLOP_ADJECTIVES = ("deadly", "ruthless", "brutal", "relentless", "lethal", "fierce", "epic", "intense",
                    "terrifying", "desperate", "heart-pounding", "explosive", "savage", "vicious")
 # A generic reason tacked on to sound causal (run 22: 'because survival is his only option', 'because escape is

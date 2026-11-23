@@ -42,7 +42,9 @@ from .shots import MAX_CUT, Footage, catalog_shots, cue_times, label_shots, plac
 from .story import with_repair
 
 STORYLINE_VERSION = 3
-SCRIPT_VERSION = 2       # Bump when the writing rules change: the script is rewritten, the shot catalog is kept.
+SCRIPT_VERSION = 3       # Bump when the writing rules change: the script is rewritten, the shot catalog is kept.
+MAX_DRAFTS = 3          # Full script drafts before the quality bar stops the run.
+QUALITY_BAR = 4         # Every story editor score must reach this.
 MAX_NOTE_REWRITES = 3    # Beats the story editor names get one targeted rewrite each, at most this many.
 FILL = 0.95              # Narration fills this share of the target; dialogue and breaths take the rest.
 ITEM_SHARE = 0.85        # An item's narration may use this share of the item's own footage.
@@ -481,6 +483,17 @@ def critique(client, ctx: Context, beats: list[dict]) -> StoryCritique:
 SCORE_KEYS = ("hook", "premise", "causality", "storytelling", "ending", "clarity", "impact")
 
 
+def _rank(c: StoryCritique) -> tuple[int, int]:
+    """Weakest score first, then the total: a draft is only as strong as its weakest part."""
+    scores = list(_scores(c).values())
+    return min(scores), sum(scores)
+
+
+def _editor_notes(c: StoryCritique) -> str:
+    return ("EDITOR NOTES ON THE CURRENT SCRIPT (fix all of them; keep what works):\n- "
+            + "\n- ".join(c.problems + [f"{n.beat_id}: {n.note}" for n in c.beat_notes]) + "\n" + c.rewrite_notes)
+
+
 def _scores(c: StoryCritique) -> dict:
     return {k: getattr(c, k) for k in SCORE_KEYS}
 
@@ -663,31 +676,53 @@ def run_storyline_pipeline(request: dict, source: Path, source_duration: float, 
         log("Gemini: writing the story script")
         draft = write_storyline(run.client, ctx)
         record = {"draft": draft, "critiques": []}
-        beats = draft["beats"]
+        beats, title, description = draft["beats"], draft["title"], draft["description"]
         try:
             review = critique(run.client, ctx, beats)
-            record["critiques"].append({**_scores(review), "problems": review.problems, "notes": review.rewrite_notes})
-            if min(_scores(review).values()) <= 3:
-                log(f"Gemini: story editor scores {_scores(review)}; rewriting once")
-                better = write_storyline(run.client, ctx, previous=beats, extra=(
-                    "EDITOR NOTES ON THE CURRENT SCRIPT (fix all of them; keep what works):\n- "
-                    + "\n- ".join(review.problems + [f"{n.beat_id}: {n.note}" for n in review.beat_notes])
-                    + "\n" + review.rewrite_notes))
-                record["rewrite"] = {"title": better["title"], "validation_retries": better["validation_retries"]}
-                beats = better["beats"]
-                draft = {**draft, "title": better["title"], "description": better["description"]}
-                review = critique(run.client, ctx, beats)
-                record["critiques"].append({**_scores(review), "problems": review.problems,
-                                            "notes": review.rewrite_notes, "after_rewrite": True})
-            # The editor's beat notes become targeted fixes: factual errors first, then weak beats.
-            beats, fixed = _apply_beat_notes(run, ctx, beats, review)
-            if fixed:
-                final = critique(run.client, ctx, beats)  # Reported, not acted on.
-                record["critiques"].append({**_scores(final), "problems": final.problems,
-                                            "notes": final.rewrite_notes, "after_beat_fixes": fixed})
         except (ValueError, GeminiOutputError) as exc:
             record["critique_error"] = str(exc)[:300]
-        record.update(beats=beats, title=draft["title"], description=draft["description"])
+            record.update(beats=beats, title=title, description=description)
+            return record
+        record["critiques"].append({**_scores(review), "problems": review.problems, "notes": review.rewrite_notes})
+        best = (beats, review, title, description)
+        # Up to MAX_DRAFTS full drafts; each rewrite gets the editor's notes on the best draft so far.
+        for attempt in range(2, MAX_DRAFTS + 1):
+            if _rank(best[1])[0] >= QUALITY_BAR:
+                break
+            log(f"Gemini: story editor scores {_scores(best[1])}; full rewrite {attempt} of {MAX_DRAFTS}")
+            try:
+                better = write_storyline(run.client, ctx, previous=best[0], extra=(
+                    f"DRAFT {attempt} OF {MAX_DRAFTS}: the best draft so far scored {_scores(best[1])}; every "
+                    f"score must reach {QUALITY_BAR}.\n" + _editor_notes(best[1])))
+                review = critique(run.client, ctx, better["beats"])
+            except (ValueError, GeminiOutputError) as exc:
+                record.setdefault("rewrite_errors", []).append(str(exc)[:300])
+                continue
+            record["critiques"].append({**_scores(review), "problems": review.problems,
+                                        "notes": review.rewrite_notes, "after_rewrite": attempt})
+            if _rank(review) > _rank(best[1]):
+                best = (better["beats"], review, better["title"], better["description"])
+        beats, review, title, description = best
+        # The editor's beat notes become targeted fixes; the fixed script is kept only if it scores no worse.
+        fixed_beats, fixed = _apply_beat_notes(run, ctx, beats, review)
+        if fixed:
+            try:
+                final = critique(run.client, ctx, fixed_beats)
+                record["critiques"].append({**_scores(final), "problems": final.problems,
+                                            "notes": final.rewrite_notes, "after_beat_fixes": fixed})
+                if _rank(final) >= _rank(review):
+                    beats, review = fixed_beats, final
+                else:
+                    record["beat_fixes_discarded"] = fixed
+            except (ValueError, GeminiOutputError) as exc:
+                record["critique_error"] = str(exc)[:300]
+        if _rank(review)[0] < QUALITY_BAR:
+            # Never render a weak story: stop before the voice and render, with the editor's reasons. The
+            # footage and shot labels stay cached, so a rerun only writes new drafts.
+            raise ValueError(f"The script is below the quality bar (every editor score must be at least "
+                             f"{QUALITY_BAR}) after {MAX_DRAFTS} drafts: best scores {_scores(review)}; problems: "
+                             + "; ".join(review.problems)[:600])
+        record.update(beats=beats, title=title, description=description, final_scores=_scores(review))
         return record
 
     script = run.checkpoint("S-storyline", inputs, compose, "script-draft.json")

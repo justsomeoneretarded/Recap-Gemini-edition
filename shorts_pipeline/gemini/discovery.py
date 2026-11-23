@@ -421,6 +421,20 @@ def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=No
     # Screening and refine answers name this plan's item ids, so their caches are per plan.
     plan_key = hashlib.sha256(plan.model_dump_json().encode()).hexdigest()[:10]
     save()
+    kept = base / "pool-kept.json"
+    if not _truthy(request.get("rediscover")) and kept.is_file() and (base / "pool.mp4").is_file():
+        saved = json.loads(kept.read_text())
+        if saved.get("plan_key") == plan_key and saved.get("pool_map"):
+            # Search results change from day to day; a found pool (and the shot labels and script built on it)
+            # is kept until rediscover=true is requested.
+            pool_map = saved["pool_map"]
+            offset = pool_map[-1]["pool_end"]
+            report.update(reused_pool=True, chosen=saved.get("chosen", []), pool={"seconds": round(offset, 1),
+                          "segments": pool_map}, finished_epoch=round(time.time(), 1))
+            save()
+            ledger.save()
+            log(f"Discovery: reusing the kept footage pool ({offset:.0f}s); options rediscover=true searches again")
+            return base / "pool.mp4", _pool_story(plan, pool_map)
 
     candidates: dict[str, dict] = {}
     searched: set[str] = set()
@@ -600,22 +614,34 @@ def discover_footage(request: dict, workdir: Path, outdir: Path, *, transport=No
     listing.write_text("".join(f"file '{p['file']}'\n" for p in pooled))
     _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(listing),
           "-c", "copy", "-movflags", "+faststart", str(pool)])
-    offset, pool_map, notes = 0.0, [], []
+    offset, pool_map = 0.0, []
     for p in pooled:
         length = _probe_duration(Path(p["file"]))
         pool_map.append({"pool_start": round(offset, 3), "pool_end": round(offset + length, 3), "item_id": p["item_id"],
                          "item_title": p["item_title"], "video_id": p["video_id"], "url": p["url"],
                          "source_start": p["downloaded_start"], "source_end": p["downloaded_end"], "shows": p["shows"]})
-        why = items[p["item_id"]].story_context
-        notes.append(f"[{offset:.0f}-{offset + length:.0f}s] {p['item_title']}: shows {p['shows']}"
-                     + (f". Why it matters: {why}" if why else ""))
         offset += length
     _write_json(base / "pool-map.json", pool_map)
+    _write_json(base / "pool-kept.json", {"plan_key": plan_key, "pool_map": pool_map, "chosen": chosen})
     report["pool"] = {"seconds": round(offset, 1), "segments": pool_map}
     report["finished_epoch"] = round(time.time(), 1)
     save()
     ledger.save()
     log(f"Discovery: footage pool ready, {offset:.0f}s from {len({p['video_id'] for p in pooled})} upload(s)")
-    story = (f"Film: {plan.film}. Premise: {plan.premise}\nThe footage is a pool of film clips joined in story "
-             "order:\n" + "\n".join(notes))
-    return pool, story
+    return pool, _pool_story(plan, pool_map)
+
+
+def _truthy(value) -> bool:
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _pool_story(plan: StoryPlan, pool_map: list[dict]) -> str:
+    """Story notes describing the pool in story order."""
+    items = {i.item_id: i for i in plan.items}
+    notes = []
+    for p in pool_map:
+        why = items[p["item_id"]].story_context if p["item_id"] in items else ""
+        notes.append(f"[{p['pool_start']:.0f}-{p['pool_end']:.0f}s] {p['item_title']}: shows {p['shows']}"
+                     + (f". Why it matters: {why}" if why else ""))
+    return (f"Film: {plan.film}. Premise: {plan.premise}\nThe footage is a pool of film clips joined in story "
+            "order:\n" + "\n".join(notes))

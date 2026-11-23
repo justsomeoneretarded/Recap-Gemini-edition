@@ -11,7 +11,7 @@ PRESETS = {'gemini-free':('gemini','free'),'gemini-balanced':('gemini','balanced
 OPTION_KEYS = {'budget':'max_budget_usd','review_passes':'review_passes','analysis':'analysis_quality',
                'fallback':'fallback_writer','speech':'tts_model','alignment':'forced_alignment',
                'strict':'strict_review','writer':'script_model','rpm':'requests_per_minute',
-               'max_requests':'max_requests', 'pace':'narration_speed'}
+               'max_requests':'max_requests', 'pace':'narration_speed', 'rediscover':'rediscover'}
 
 
 def parse_options(text: str) -> dict:
@@ -29,7 +29,7 @@ def parse_options(text: str) -> dict:
             value = float(value)
         elif name in ('review_passes', 'max_requests'):
             value = int(value)
-        elif name == 'strict_review':
+        elif name in ('strict_review', 'rediscover'):
             value = value.lower() in ('1', 'true', 'yes')
         result[name] = value
     return result
