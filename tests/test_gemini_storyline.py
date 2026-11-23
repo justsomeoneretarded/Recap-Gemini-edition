@@ -97,6 +97,12 @@ def rewrite(parts):
     text = parts[0]["text"]
     available = re.findall(r'"id": "([A-Z0-9-]+)"', text)
     cites = lambda k: [{"shot_id": available[k], "cue": ""}] if len(available) > k else []
+    only = re.search(r"Rewrite ONLY sentence\(s\) ([N0-9., ]+);", text)
+    if only:  # Keep every other sentence word for word, as the prompt asks.
+        flagged = {x.strip() for x in only.group(1).split(",")}
+        current = json.JSONDecoder().raw_decode(text[text.index("\n{") + 1:])[0]["sentences"]
+        return {"sentences": [{"text": line(len(t.split()), 3) if sid in flagged else t, "shots": cites(k)}
+                              for k, (sid, t) in enumerate(current.items())], "rationale": "fit"}
     most = re.search(r"at most (\d+) words", text)
     least = re.search(r"at least (\d+) words", text)
     n = int(most.group(1)) if most else (int(least.group(1)) + 2 if least else 16)
@@ -318,6 +324,34 @@ def test_a_visual_contradiction_rewrites_its_beat_without_deleting_lines(discove
     timeline = json.loads((out / "timeline.json").read_text())
     beat = next(b for b in timeline["beats"] if b["id"] == "N02")
     assert len(beat["sentences"]) == 2 and beat["shots"]
+    # Run 25: whole-beat fixes lost the cold open and the ending. Only the flagged sentence changes now.
+    draft = next(b for b in json.loads((out / "script-draft.json").read_text())["beats"] if b["id"] == "N02")
+    assert beat["sentences"][1]["text"] == draft["sentences"][1]["text"]
+    assert beat["sentences"][0]["text"] != draft["sentences"][0]["text"]
+    prompt = next(c["parts"][0]["text"] for c in fake.calls
+                  if c["schema"] == "BeatText" and "contradict the footage" in c["parts"][0]["text"])
+    assert "Rewrite ONLY sentence(s) N02.1" in prompt and "ROLE: PREMISE" in prompt
+
+
+def test_rewrites_after_the_bar_are_scored_and_weak_ones_are_undone(discovered):
+    """Run 25 passed the bar, then unscored contradiction rewrites turned its ending into a truce."""
+    fake = transport(contradictions=[{"sentence_id": "N02.1", "on_screen": "a hotel lobby",
+                                      "problem": "names the wrong man"}])
+    reviews = iter([5, 3])  # The draft passes; the rewritten script does not.
+    keys = storyline.SCORE_KEYS
+    fake.overrides["StoryCritique"] = lambda parts: {**{k: next(reviews, 5) if k == keys[0] else 5 for k in keys},
+                                                     "problems": ["the ending lost its betrayal"],
+                                                     "rewrite_notes": "", "beat_notes": []}
+    out = discovered / "out"
+    generate(_request(), discovered / "work", out, gemini_transport=fake, synthesize=FakeSynth(3.0))
+    history = json.loads((out / "correction-history.json").read_text())
+    assert any(h["action"] == "restore_approved_wording" for h in history)
+    timeline = json.loads((out / "timeline.json").read_text())
+    draft = json.loads((out / "script-draft.json").read_text())
+    approved = {b["id"]: b["text"] for b in draft["beats"]}
+    assert next(b for b in timeline["beats"] if b["id"] == "N02")["text"] == approved["N02"]
+    quality = json.loads((out / "quality-review.json").read_text())
+    assert any(i["check"] == "visual_contradiction" and i["severity"] == "minor" for i in quality["issues"])
 
 
 def test_overlong_narration_is_shortened_by_whole_beat_rewrites(discovered):

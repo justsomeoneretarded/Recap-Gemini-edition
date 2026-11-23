@@ -162,3 +162,12 @@ Run 24 rendered a finished 90 s Short. The editing passed every check: 70 cuts, 
 - **Footage is kept.** Discovery ran again in run 24 because YouTube search results change from day to day. It assembled a different pool, with 11.5 s for the opening moment instead of 41.8 s. That invalidated the cached shot labels and run 23's 5/5 script. Discovery now keeps the pool it finds (`pool-kept.json`, tied to the story plan) and reuses it until `rediscover=true` is set.
 - **A script quality bar.** The story path writes up to 3 full drafts. Each rewrite gets the editor's notes on the best draft so far, and the draft with the strongest weakest score is kept. Beat fixes are kept only if they do not lower the score; in run 24 they took the hook from 4 to 2. If any editor score is still below 4, the run stops before voice and render with the editor's reasons. The footage and shot labels stay cached, so a rerun only writes new drafts.
 - **More stock phrases are rejected,** including "clears a path", "reckoning", "lethal weapon" and "cash in".
+
+### Run 25 additions (23 November 2026)
+The editing in run 25 passed every check: 72 cuts, median 1.18 s, no filler, every sentence on its cited shot, and no stock phrases. Its second draft also passed the quality bar: hook 4, premise 5, causality 4, storytelling 4, ending 5, clarity 5, impact 4. It opened cold on the library book kill and ended on Winston shooting John off the roof.
+- **What went wrong:** after the bar, the visual-contradiction check rewrote three whole beats, unscored. The cold open became backstory, and the betrayal ending became a "parley", because the rooftop clip mostly shows the negotiation.
+- **What changed:**
+  - A contradiction fix now rewrites only the flagged sentences. Every other sentence must come back word for word, or the rewrite is rejected and retried.
+  - Every rewrite carries its beat's role: cold open, premise, chain or ending.
+  - The visual check no longer counts an event that is merely not visible in the shots as a contradiction.
+  - The finished wording is scored again before render. If it falls below the bar, the approved wording comes back, and its contradictions are listed as minor issues. If it is still below the bar after length fixes, nothing is rendered.

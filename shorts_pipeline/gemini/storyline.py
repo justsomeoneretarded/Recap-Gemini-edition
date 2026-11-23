@@ -129,7 +129,9 @@ EDITOR_SYSTEM = (
 CHECK_SYSTEM = (
     "You check narration against the footage it plays over. Report only clear contradictions: the narration "
     "names the wrong person, or describes an event that is visibly different from what is on screen. Story meaning, "
-    "motives, backstory and lines about what happens off screen are NOT contradictions. Return JSON matching the schema.")
+    "motives, backstory and lines about what happens off screen are NOT contradictions. An event the narration "
+    "states that is simply not visible in these shots (it may happen just off screen or a moment later, e.g. a "
+    "shooting during a negotiation scene) is NOT a contradiction. Return JSON matching the schema.")
 
 STRUCTURE = (
     "STRUCTURE (this is how the best recap Shorts work):\n"
@@ -498,11 +500,28 @@ def _scores(c: StoryCritique) -> dict:
     return {k: getattr(c, k) for k in SCORE_KEYS}
 
 
+def beat_role(beats: list[dict], beat_id: str) -> str:
+    """What this beat must keep doing, whatever a rewrite fixes (run 25 lost its cold open and its ending)."""
+    narration = [b["id"] for b in beats if b["kind"] == "narration"]
+    if beat_id == narration[0]:
+        return ("ROLE: COLD OPEN. Stay inside the on-screen action and its stakes; no backstory, no setup "
+                "(the premise comes in the next beat).")
+    if len(narration) > 1 and beat_id == narration[1]:
+        return "ROLE: PREMISE. Rewind and say who the hero is, what he did and why he is hunted."
+    if beat_id == narration[-1]:
+        return ("ROLE: ENDING. Keep the payoff, twist or betrayal this beat ends on; the footage may show only "
+                "part of it, which is not a contradiction.")
+    return "ROLE: CHAIN. Tell this item's moment as a consequence of the beat before it."
+
+
 def rewrite_beat(client, ctx: Context, beats: list[dict], beat_id: str, reason: str, *,
-                 min_words: int | None = None, max_words: int | None = None) -> list[dict]:
-    """Rewrite one narration beat as a whole; the story around it stays fixed."""
+                 min_words: int | None = None, max_words: int | None = None,
+                 only: list[int] | None = None) -> list[dict]:
+    """Rewrite one narration beat; the story around it stays fixed. With ``only`` (0-based sentence indexes),
+    just those sentences change and every other sentence must come back word for word."""
     index = next(i for i, b in enumerate(beats) if b["id"] == beat_id)
     beat = beats[index]
+    keep = {i: x["text"] for i, x in enumerate(beat.get("sentences", [])) if only is not None and i not in only}
     limits = " and ".join(x for x in (f"at least {min_words} words" if min_words else "",
                                       f"at most {max_words} words" if max_words else "") if x)
     item = next(i for i in ctx.items if i["item_id"] == beat["item_id"])
@@ -512,13 +531,18 @@ def rewrite_beat(client, ctx: Context, beats: list[dict], beat_id: str, reason: 
              for x in b["sentences"] for c in x.get("shots", [])}
     available = [x for i in (ctx.items if any_item else [item]) for x in ctx.shot_list(i["item_id"])
                  if x["id"] not in taken]
-    prompt = (f"Rewrite narration beat {beat_id} only. Problem to fix: {reason}. "
-              + (f"Keep it to {limits} in total. " if limits else "")
+    scope = ("" if only is None else
+             f"Rewrite ONLY sentence(s) {', '.join(f'{beat_id}.{i + 1}' for i in only)}; return all "
+             f"{len(beat['sentences'])} sentences in order, every other sentence copied word for word. ")
+    prompt = (f"Rewrite narration beat {beat_id} only. Problem to fix: {reason}. " + scope + beat_role(beats, beat_id)
+              + " " + (f"Keep it to {limits} in total. " if limits else "")
               + "Keep its place in the story and its link to the beats around it. " + NARRATION_RULE
               + "No stock phrases or piled-up adjectives: concrete words about who does what and why. For each "
               "sentence list `shots` (ids from available_shots that show it, about one per 2 seconds of speech, "
               "each with `cue`, the words it illustrates).\n" + json.dumps({
-                  "beat": beat["text"], "item": {"item_id": item["item_id"], "title": item["title"],
+                  "beat": beat["text"], "sentences": {f"{beat_id}.{i + 1}": x["text"]
+                                                     for i, x in enumerate(beat.get("sentences", []))},
+                  "item": {"item_id": item["item_id"], "title": item["title"],
                                                  "what_happens": item["what_happens"],
                                                  "why_it_matters": item.get("story_context", "")},
                   "available_shots": available,
@@ -528,6 +552,12 @@ def rewrite_beat(client, ctx: Context, beats: list[dict], beat_id: str, reason: 
 
     def validate(result: BeatText):
         sentences = _sentences(ctx, beat["item_id"], result.sentences, beat_id, set(taken), any_item=any_item)
+        if keep:
+            changed = [f"{beat_id}.{i + 1}" for i, text in keep.items()
+                       if i >= len(sentences) or sentences[i]["text"].strip() != text.strip()]
+            if len(sentences) != len(beat["sentences"]) or changed:
+                raise ValueError(f"only the flagged sentences may change; keep {', '.join(changed) or 'the count'} "
+                                 "exactly as they were")
         words = sum(count_words(s["text"]) for s in sentences)
         if max_words and words > max_words:
             raise ValueError(f"rewrite has {words} words; maximum is {max_words}")
@@ -744,10 +774,13 @@ def run_storyline_pipeline(request: dict, source: Path, source_duration: float, 
         mine = [c for c in found if c["sentence_id"].startswith(beat_id + ".")]
         beat = next(b for b in beats if b["id"] == beat_id)
         words = count_words(beat["text"])
+        flagged = sorted({int(c["sentence_id"].split(".")[1]) - 1 for c in mine
+                          if c["sentence_id"].split(".")[-1].isdigit()} & set(range(len(beat["sentences"]))))
         try:
             beats = rewrite_beat(run.client, ctx, beats, beat_id, "these lines contradict the footage they play over: "
                                  + "; ".join(f"{c['problem']} (on screen: {c['on_screen']})" for c in mine),
-                                 min_words=max(4, math.floor(words * 0.85)), max_words=words + 3)
+                                 min_words=max(4, math.floor(words * 0.85)), max_words=words + 3,
+                                 only=flagged or None)
             run.record(stage="V", action="rewrite_contradiction", beat_id=beat_id, outcome="rewritten",
                        contradictions=mine)
         except (ValueError, GeminiOutputError) as exc:
@@ -759,6 +792,32 @@ def run_storyline_pipeline(request: dict, source: Path, source_duration: float, 
     if found and any(b["kind"] == "narration" and not b.get("words") for b in beats):
         beats = _fit_length(run, ctx, beats)
         beats, evidence = place_storyline(ctx, beats)
+    # 7. The bar again, on the words that will actually be heard: fixes after the gate are scored too.
+    final_scores = script.get("final_scores")
+    gate_text = {b["id"]: b["text"] for b in script["beats"] if b["kind"] == "narration"}
+    changed = [b["id"] for b in beats if b["kind"] == "narration" and b["text"] != gate_text.get(b["id"])]
+    if changed and final_scores:
+        final_scores = _final_bar(run, ctx, beats)
+        if final_scores is None or min(final_scores.values()) < QUALITY_BAR:
+            # Restore the gate-passed wording; a contradiction it had is listed instead of fixed.
+            log(f"Gemini: rewrites after the quality bar scored {final_scores}; restoring the approved wording "
+                f"of {', '.join(changed)}")
+            approved = {b["id"]: b for b in script["beats"]}
+            beats = [copy.deepcopy(approved[b["id"]]) if b["id"] in changed else b for b in beats]
+            issues += [{"check": "visual_contradiction", "severity": "minor", "beat_id": c["sentence_id"].split(".")[0],
+                        "sentence_id": c["sentence_id"], "description": c["problem"], "origin": "gemini_review"}
+                       for c in found if c["sentence_id"].split(".")[0] in changed]
+            run.record(stage="Q", action="restore_approved_wording", beats=changed, scores=final_scores)
+            beats = _fit_length(run, ctx, beats)
+            beats, evidence = place_storyline(ctx, beats)
+            now = [b["id"] for b in beats if b["kind"] == "narration" and b["text"] != gate_text.get(b["id"])]
+            if now:
+                final_scores = _final_bar(run, ctx, beats)
+                if final_scores is not None and min(final_scores.values()) < QUALITY_BAR:
+                    raise ValueError(f"The final script fell below the quality bar after length fixes: "
+                                     f"{final_scores}. Nothing was rendered; a rerun writes new drafts.")
+            else:
+                final_scores = script.get("final_scores")
     # Quality record
     lines = [s["text"] for b in beats if b["kind"] == "narration" for s in b["sentences"]]
     critiques = script.get("critiques", [])
@@ -785,6 +844,7 @@ def run_storyline_pipeline(request: dict, source: Path, source_duration: float, 
     review_status = "passed_with_warnings" if issues else "passed_automated_review"
     _write_json(outdir / "quality-review.json", {
         "review_status": review_status, "path": "storyline", "story_critique": critiques, "issues": issues,
+        "final_scores": final_scores,
         "sentences_borrowing_neighbour_footage": borrowed,
         "cuts": {"count": len(cuts), "median_seconds": round(sorted(cuts)[len(cuts) // 2], 2) if cuts else 0,
                  "longest_seconds": round(max(cuts), 2) if cuts else 0}, "duration_seconds": round(total, 2),
@@ -804,6 +864,18 @@ def run_storyline_pipeline(request: dict, source: Path, source_duration: float, 
                            "coverage": run.inventory.get("coverage", {})}}
     run.ledger.save()
     return result, run
+
+
+def _final_bar(run, ctx: Context, beats: list[dict]) -> dict | None:
+    """Scores of the final words, or None when the editor could not be reached (then the approved wording wins)."""
+    try:
+        review = critique(run.client, ctx, beats)
+    except (ValueError, GeminiOutputError) as exc:
+        run.record(stage="Q", action="final_critique", outcome="failed", error=str(exc)[:300])
+        return None
+    scores = _scores(review)
+    run.record(stage="Q", action="final_critique", scores=scores, problems=review.problems[:4])
+    return scores
 
 
 def _apply_beat_notes(run, ctx: Context, beats: list[dict], review: StoryCritique) -> tuple[list[dict], list[str]]:
