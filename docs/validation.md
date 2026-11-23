@@ -171,3 +171,8 @@ The editing in run 25 passed every check: 72 cuts, median 1.18 s, no filler, eve
   - Every rewrite carries its beat's role: cold open, premise, chain or ending.
   - The visual check no longer counts an event that is merely not visible in the shots as a contradiction.
   - The finished wording is scored again before render. If it falls below the bar, the approved wording comes back, and its contradictions are listed as minor issues. If it is still below the bar after length fixes, nothing is rendered.
+
+### Run 26 additions (23 November 2026)
+Run 26 reused everything it should have: the kept footage pool (326 s), the shot catalog, and run 25's approved script (hook 4, premise 5, ending 5, impact 4).
+- **What went wrong:** during narration, one rewrite call met 503 "high demand" on every live Flash model (3.8, 3.7, 3.6, 3.5). The last candidate, gemini-2.5-flash, answered 404 ("no longer available to new users"). The overload wait only ran when the *last* error was an overload, so the run stopped.
+- **What changed:** the client now remembers that a stage met a 503 or 504 during the run. When no candidate is left, it waits and restarts from the best live model (up to `overload_wait_seconds`). A retired model is still never retried.

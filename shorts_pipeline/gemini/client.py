@@ -405,6 +405,7 @@ class GeminiClient:
         self._remapped: dict[tuple, UploadedFile] = {}
         self._dead_models: set[str] = set()  # Answered 'not found' / no free quota: skipped for the run.
         self._overload_waited, self._overload_cycles = 0.0, 0
+        self._overloaded_stages: set[str] = set()  # Stages that met a 503/504 this run (temporary, so wait).
         self._context_caches: dict[str, str] = {}
         self.available_models: set[str] | None = None
         self.requests_sent = 0
@@ -572,6 +573,8 @@ class GeminiClient:
             try:
                 return self._generate(stage, schema, parts, system=system, model=current, patient=patient, **kwargs)
             except (GeminiModelUnavailable, GeminiQuotaExhausted, GeminiTimeout) as exc:
+                if isinstance(exc, (GeminiOverloaded, GeminiTimeout)):
+                    self._overloaded_stages.add(base)
                 if type(exc) in (GeminiModelUnavailable, GeminiNoFreeQuota):
                     self._dead_models.add(current)  # Not a passing state: never come back to it this run.
                 if isinstance(exc, GeminiQuotaExhausted):
@@ -594,9 +597,10 @@ class GeminiClient:
         candidates = list(self.settings.model_preferences[base])
         exhausted = self._exhausted_today()
         usable = self._fallbacks(base, current)
-        if not usable and isinstance(exc, (GeminiOverloaded, GeminiTimeout)):
+        if not usable and (isinstance(exc, (GeminiOverloaded, GeminiTimeout)) or base in self._overloaded_stages):
             # Overload is temporary (run 13 walked all nine candidates in 503s and gave up):
-            # wait, then start again from the best model that is still usable.
+            # wait, then start again from the best model that is still usable. Run 26: four live models
+            # answered 503 and the last candidate was a retired model (404); the 404 must not end the wait.
             alive = [m for m in candidates if (self.available_models is None or m in self.available_models)
                      and m not in self._dead_models
                      and m not in set.intersection(*(self._exhausted_today(i) for i in range(self.key_count)))]
