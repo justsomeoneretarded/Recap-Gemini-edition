@@ -156,3 +156,9 @@ Run 23 wrote the strongest script so far. The story editor scored it 5 on everyt
 - **Cause:** the renderer trimmed each shot to whole frames, rounding down. With about 8 short cuts per beat, that lost up to one frame per cut, so beats N01, N02 and N04 were 3–4 frames short.
 - **Fix:** the renderer now trims only when the whole-frame capacities still cover the narration. Otherwise it keeps every full span.
 - **Check on run 23's timeline:** all 8 beats now allocate. The slowest plays at 0.988× speed. Nothing loops and no shot is dropped.
+
+### Run 24 additions (23 November 2026)
+Run 24 rendered a finished 90 s Short. The editing passed every check: 70 cuts, median 1.31 s, no filler on screen, and every sentence opened on its cited shot. The story did not pass. The editor's final scores were hook 2, causality 3, storytelling 3 and impact 3, and stock phrases got through.
+- **Footage is kept.** Discovery ran again in run 24 because YouTube search results change from day to day. It assembled a different pool, with 11.5 s for the opening moment instead of 41.8 s. That invalidated the cached shot labels and run 23's 5/5 script. Discovery now keeps the pool it finds (`pool-kept.json`, tied to the story plan) and reuses it until `rediscover=true` is set.
+- **A script quality bar.** The story path writes up to 3 full drafts. Each rewrite gets the editor's notes on the best draft so far, and the draft with the strongest weakest score is kept. Beat fixes are kept only if they do not lower the score; in run 24 they took the hook from 4 to 2. If any editor score is still below 4, the run stops before voice and render with the editor's reasons. The footage and shot labels stay cached, so a rerun only writes new drafts.
+- **More stock phrases are rejected,** including "clears a path", "reckoning", "lethal weapon" and "cash in".

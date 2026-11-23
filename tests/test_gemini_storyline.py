@@ -268,16 +268,44 @@ def test_discovered_footage_is_narrated_as_a_story_over_its_own_footage(discover
     assert "John" in (out / "script.txt").read_text()
 
 
-def test_a_weak_story_gets_exactly_one_editor_driven_rewrite(discovered):
-    fake = transport(critique_score=2)
-    generate(_request(), discovered / "work", discovered / "out", gemini_transport=fake, synthesize=FakeSynth(3.0))
+def test_a_story_below_the_bar_gets_three_drafts_then_stops_before_any_voice_or_render(discovered):
+    """Run 24 rendered a script whose editor scores were hook 2, impact 3."""
+    fake = transport(critique_score=3)
+    synth = FakeSynth(3.0)
+    with pytest.raises(ValueError, match="below the quality bar"):
+        generate(_request(), discovered / "work", discovered / "out", gemini_transport=fake, synthesize=synth)
     calls = [c for c in fake.calls if c["schema"] == "StorylineScript"]
-    assert len(calls) == 2
+    assert len(calls) == storyline.MAX_DRAFTS
     assert "EDITOR NOTES" in calls[1]["parts"][0]["text"] and "weak hook" in calls[1]["parts"][0]["text"]
-    # The rewritten script is scored again for the report, and a still-weak story is flagged.
-    quality = json.loads((discovered / "out" / "quality-review.json").read_text())
-    assert len(quality["story_critique"]) == 2 and quality["review_status"] == "passed_with_warnings"
-    assert any(i["check"] == "story_quality" for i in quality["issues"])
+    assert synth.calls == 0 and not (discovered / "out" / "final.mp4").exists()
+
+
+def test_the_strongest_draft_is_kept_and_rendered(discovered):
+    fake = transport()
+    scores = iter([3, 5])
+    keys = storyline.SCORE_KEYS
+
+    def review(parts):
+        score = next(scores, 5)
+        return {**{k: score for k in keys}, "problems": ["weak hook"], "rewrite_notes": "sharpen", "beat_notes": []}
+
+    fake.overrides["StoryCritique"] = review
+    write, drafts = fake.overrides["StorylineScript"], []
+
+    def varied(parts):  # A real rewrite differs from the draft; so must its critique request.
+        result = write(parts)
+        drafts.append(1)
+        first = result["beats"][0]["sentences"][0]
+        first["text"] = first["text"].replace(" tonight.", " " + "again " * (len(drafts) - 1) + "tonight.")
+        return result
+
+    fake.overrides["StorylineScript"] = varied
+    out = discovered / "out"
+    result = generate(_request(), discovered / "work", out, gemini_transport=fake, synthesize=FakeSynth(3.0))
+    assert Path(result["final"]).is_file()
+    assert len([c for c in fake.calls if c["schema"] == "StorylineScript"]) == 2
+    draft = json.loads((out / "script-draft.json").read_text())
+    assert draft["final_scores"]["hook"] == 5
 
 
 def test_a_visual_contradiction_rewrites_its_beat_without_deleting_lines(discovered):
@@ -432,6 +460,9 @@ def test_generic_tacked_on_reasons_are_slop():
     many = [f"John runs to the car because the man {n} called." for n in range(5)] + ["He drives."] * 5
     assert any("'because' in" in f for f in slop(many))
     assert not slop(["Ernest corners John between the stacks, so John grabs the only weapon in reach: a book."])
+    run24 = ["He breaks open display cases until he clears a path to survive.",
+             "He turns the horses into lethal weapons before returning to face New York's reckoning."]
+    assert {"clears a path", "lethal weapon", "reckoning"} <= set(slop(run24))
 
 
 def test_flash_lite_never_writes_the_script_the_run_stops_resumable_instead(discovered):

@@ -106,12 +106,22 @@ def test_discovery_screens_links_downloads_only_approved_segments_and_pools_them
     assert abs(float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
                                      str(pool)], capture_output=True, text=True).stdout) - 29) < 1.0  # 14 s + 15 s with handles
     assert "Car stolen" in notes and "Digging up the floor" in notes
-    # A rerun reuses every Gemini answer and downloaded segment.
+    # A rerun keeps the found pool: search results change from day to day (run 24 lost its opening footage
+    # and the shot labels and script built on it), so nothing is searched, screened or downloaded again.
     calls = len(transport.calls)
-    discovery.discover_footage(request(), tmp_path / "work", tmp_path / "out2", transport=transport, search=search,
+    again, again_notes = discovery.discover_footage(
+        request(), tmp_path / "work", tmp_path / "out2", transport=transport,
+        search=lambda *a, **k: pytest.fail("searched again"), download=lambda *a: pytest.fail("downloaded again"),
+        log=lambda *_: None, sleep=lambda s: None)
+    assert len(transport.calls) == calls and again == pool and again_notes == notes
+    assert json.loads((tmp_path / "out2" / "discovery-report.json").read_text())["reused_pool"] is True
+    # rediscover=true searches again (every Gemini answer and download is still cached).
+    searched = []
+    discovery.discover_footage(request(rediscover=True), tmp_path / "work", tmp_path / "out3", transport=transport,
+                               search=lambda q, limit=8: searched.append(q) or search(q, limit),
                                download=lambda *a: pytest.fail("downloaded again"), log=lambda *_: None,
                                sleep=lambda s: None)
-    assert len(transport.calls) == calls
+    assert searched and len(transport.calls) == calls
 
 
 def test_must_have_items_without_footage_get_a_second_search_round(tmp_path, monkeypatch):
