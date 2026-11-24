@@ -765,6 +765,22 @@ def test_when_every_model_is_overloaded_the_run_waits_and_starts_again_from_the_
     assert client.settings.resolved_models["review"] == first
 
 
+def test_a_retired_last_candidate_does_not_cancel_the_overload_wait(tmp_path):
+    """Run 26: 503s on every live writing model, then the last candidate answered 404 (retired), and the run
+    stopped instead of waiting out the overload."""
+    waits = []
+    busy = FakeAPIError("server", "503 UNAVAILABLE high demand")
+    gone = FakeAPIError("model", "404 NOT_FOUND no longer available to new users")
+    client = make_client(tmp_path, Scripted([busy] * 3 + [gone] + [REVIEW]))
+    client.sleep = waits.append
+    first, second = client.settings.model_preferences["review"][:2]
+    client.settings.model_preferences["review"] = [first, second]
+    assert client.generate("review", QualityReview, [text_part("x")], system="s").verdict == "pass"
+    cycle = [e for e in client.ledger.events if e["kind"] == "overload_cycle"]
+    assert len(cycle) == 1 and cycle[0]["restart_with"] == first and waits
+    assert client.settings.resolved_models["review"] == first
+
+
 def test_a_not_found_model_is_skipped_for_the_rest_of_the_run(tmp_path):
     busy = FakeAPIError("server", "503 UNAVAILABLE high demand")
     gone = FakeAPIError("model", "404 NOT_FOUND no longer available to new users")
