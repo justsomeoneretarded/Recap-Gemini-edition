@@ -13,7 +13,7 @@ from shorts_pipeline.gemini import discovery, shots, storyline  # noqa: E402
 ALL = [schemas.WindowAnalysis, schemas.VerificationResult, schemas.StoryMap, schemas.EditorialPlan,
        schemas.ScriptDraft, schemas.ScriptRevision, schemas.BeatRewrite, schemas.MatchingResult, schemas.QualityReview,
        discovery.StoryPlan, discovery.CandidateRanking, discovery.Screening, discovery.RefinedSegments,
-       storyline.StorylineScript, storyline.StoryCritique, storyline.BeatText, storyline.VisualCheck,
+       storyline.StorylineScript, storyline.StoryCritique, storyline.BeatText, storyline.VisualCheck, storyline.FactCheck,
        shots.ShotLabels]
 
 

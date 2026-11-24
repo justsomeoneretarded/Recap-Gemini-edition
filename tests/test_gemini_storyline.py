@@ -132,6 +132,7 @@ def transport(critique_score=5, contradictions=None, beat_notes=None):
 
     scores = {k: critique_score for k in storyline.SCORE_KEYS}
     return FakeTransport(overrides={"StorylineScript": write, "BeatText": rewrite, "VisualCheck": check,
+                                    "FactCheck": {"errors": []},
                                     "ShotLabels": label,
                                     "StoryCritique": {**scores, "problems": ["weak hook"], "rewrite_notes": "sharpen",
                                                       "beat_notes": beat_notes or []}})
@@ -394,7 +395,7 @@ def test_only_clean_short_film_lines_are_offered_as_dialogue():
         return {"id": ident, "start": start, "end": end, "text": text, "confidence": confidence,
                 "words": [{"word": w, "start": 0, "end": 0.1} for w in text.split()], "timing_provenance": "asr"}
     pool = {"D1": quote("D1", "little run down there John. Ernest I still have time. He's almost up.", 11, 15),
-            "D2": quote("D2", "I still have time.", 12, 13.2),
+            "D2": quote("D2", "Drop the book now.", 12, 13.2),
             "D3": quote("D3", "Who's gonna know?", 14, 15, confidence=0.5)}
     ctx = Context(PLAN, POOL, SHOTS, pool, {"title": "t", "user_story_notes": "John Wick"},
                   rate=3.0, target=20)
@@ -511,3 +512,41 @@ def test_flash_lite_never_writes_the_script_the_run_stops_resumable_instead(disc
                  synthesize=FakeSynth(3.0))
     written = [c["model"] for c in fake.calls if c["schema"] == "StorylineScript"]
     assert written and not any("lite" in m for m in written)
+
+
+def test_articles_are_fixed_without_breaking_exceptions():
+    """Run 27 said 'an giant assassin'."""
+    from shorts_pipeline.gemini.storyline import fix_articles
+    assert fix_articles("John slams a book into an giant assassin's throat.") == \
+        "John slams a book into a giant assassin's throat."
+    assert fix_articles("A assassin waits.") == "An assassin waits."
+    for keep in ("He has an hour left.", "It is a one-hour head start.", "A unique coin.", "An honest man.",
+                 "a European city", "an empty hall"):
+        assert fix_articles(keep) == keep
+
+
+def test_a_film_line_plays_only_where_it_belongs():
+    """Run 27 played 'Consider your origins.' between the library kill and the bounty premise."""
+    from shorts_pipeline.gemini.storyline import relevant_quote
+    context = "John breaks a giant assassin's neck with a library book. Library fight. John fights a giant with a book"
+    assert not relevant_quote("Consider your origins.", context)
+    assert relevant_quote("Put the book down.", context)
+
+
+def test_a_fact_check_fixes_only_the_wrong_sentence(discovered):
+    """Run 27 credited the Elder with deconsecrating the Continental (it was the Adjudicator)."""
+    fake = transport()
+    fake.overrides["FactCheck"] = {"errors": [{"sentence_id": "N02.1", "error": "names the Elder",
+                                               "correction": "the Adjudicator deconsecrates the Continental"}]}
+    out = discovered / "out"
+    generate(_request(), discovered / "work", out, gemini_transport=fake, synthesize=FakeSynth(3.0))
+    history = json.loads((out / "correction-history.json").read_text())
+    assert any(h["action"] == "fix_fact" and h["outcome"] == "rewritten" and h["beat_id"] == "N02" for h in history)
+    prompt = next(c["parts"][0]["text"] for c in fake.calls
+                  if c["schema"] == "BeatText" and "gets the film wrong" in c["parts"][0]["text"])
+    assert "Rewrite ONLY sentence(s) N02.1" in prompt and "the Adjudicator deconsecrates" in prompt
+    timeline = json.loads((out / "timeline.json").read_text())
+    draft = json.loads((out / "script-draft.json").read_text())
+    beat = next(b for b in timeline["beats"] if b["id"] == "N02")
+    approved = next(b for b in draft["beats"] if b["id"] == "N02")
+    assert beat["sentences"][1]["text"] == approved["sentences"][1]["text"]
