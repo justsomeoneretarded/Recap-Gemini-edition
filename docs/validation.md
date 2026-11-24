@@ -176,3 +176,9 @@ The editing in run 25 passed every check: 72 cuts, median 1.18 s, no filler, eve
 Run 26 reused everything it should have: the kept footage pool (326 s), the shot catalog, and run 25's approved script (hook 4, premise 5, ending 5, impact 4).
 - **What went wrong:** during narration, one rewrite call met 503 "high demand" on every live Flash model (3.8, 3.7, 3.6, 3.5). The last candidate, gemini-2.5-flash, answered 404 ("no longer available to new users"). The overload wait only ran when the *last* error was an overload, so the run stopped.
 - **What changed:** the client now remembers that a stage met a 503 or 504 during the run. When no candidate is left, it waits and restarts from the best live model (up to `overload_wait_seconds`). A retired model is still never retried.
+
+### Run 27 additions (24 November 2026)
+Run 27 passed every automated check and was delivered: final editor scores all ≥ 4, 74 cuts with a median of 1.13 s, no filler, 92 s. Reading the script still found three flaws, now handled automatically:
+- **Grammar:** "an giant assassin" now reads "a giant assassin". `fix_articles` corrects a/an on every sentence, and on a cached approved script. Silent-h words and words with a "you" or "one" sound are exceptions.
+- **Out-of-place film line:** "Consider your origins." played between the library kill and the premise. A film line is now kept only if it shares a content word with the narration around it or with its story moment.
+- **Factual error:** N05 credited the Elder with deconsecrating the Continental; it was the Adjudicator. A fact-check call now lists sentences that credit the wrong person, or get the order or place wrong, before narration. Only those sentences are rewritten. The final quality bar scores the result and restores the approved wording if the score drops.

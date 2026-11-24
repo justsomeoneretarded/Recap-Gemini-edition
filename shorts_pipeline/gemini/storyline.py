@@ -115,6 +115,16 @@ class VisualCheck(BaseModel):
     contradictions: list[Contradiction] = Field(default_factory=list)
 
 
+class FactError(BaseModel):
+    sentence_id: str
+    error: str = Field(description="What the sentence gets wrong about the film")
+    correction: str = Field(description="The fact as it is in the film")
+
+
+class FactCheck(BaseModel):
+    errors: list[FactError] = Field(default_factory=list)
+
+
 # ------------------------------------------------------------------ prompts
 WRITER_SYSTEM = (
     "You are the head writer of a top movie-recap Shorts channel. Your narration is gripping storytelling: it "
@@ -163,6 +173,51 @@ STRUCTURE = (
 
 
 # ------------------------------------------------------------------ inputs
+_AN_EXCEPTIONS = re.compile(r"^(hour|honest|honou?r|heir)", re.I)            # silent h: "an hour"
+_A_EXCEPTIONS = re.compile(r"^(one|once|uni|use|usu|uti|euro|eu|ewe|ubiq|ufo|uk\b)", re.I)  # "a one-hour"
+
+
+def fix_articles(text: str) -> str:
+    """'an giant' -> 'a giant', 'a assassin' -> 'an assassin' (run 27 said 'an giant assassin')."""
+    def repl(m: re.Match) -> str:
+        article, space, word = m.group(1), m.group(2), m.group(3)
+        vowel = word[:1].lower() in "aeiou"
+        want_an = (vowel and not _A_EXCEPTIONS.match(word)) or bool(_AN_EXCEPTIONS.match(word))
+        fixed = ("an" if want_an else "a")
+        if article[0].isupper():
+            fixed = fixed.capitalize()
+        return fixed + space + word
+    return re.sub(r"\b([Aa]n?)(\s+)([A-Za-z][\w'’-]*)", repl, text)
+
+
+_STOP = frozenset("that this with from have will your they them their there what when where which while would "
+                  "about into just only than then were been being some such over very more most also".split())
+
+
+def _content_words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z]{4,}", text.casefold()) if w not in _STOP}
+
+
+def relevant_quote(quote_text: str, context: str) -> bool:
+    """A film line plays only where it belongs: it shares a content word with the narration around it or its
+    moment (run 27 played 'Consider your origins.' between the library kill and the bounty premise)."""
+    return bool(_content_words(quote_text) & _content_words(context))
+
+
+def _dialogue_context(ctx: "Context", beats: list[dict], index: int) -> str:
+    beat = beats[index]
+    item = next((i for i in ctx.items if i["item_id"] == beat["item_id"]), {})
+    near = [b["text"] for b in (beats[index - 1:index] + beats[index + 1:index + 2]) if b["kind"] == "narration"]
+    return " ".join(near + [item.get("title", ""), item.get("what_happens", ""), item.get("story_context", "")])
+
+
+def drop_unrelated_dialogue(ctx: "Context", beats: list[dict]) -> tuple[list[dict], list[str]]:
+    # A clip in the opening slot is left for check_story, which rejects it with its own message.
+    drop = {i for i, b in enumerate(beats) if i and b["kind"] == "dialogue"
+            and not relevant_quote(b["text"], _dialogue_context(ctx, beats, i))}
+    return [b for i, b in enumerate(beats) if i not in drop], [beats[i]["text"] for i in sorted(drop)]
+
+
 def clean_quote(q: dict) -> bool:
     """A film line worth playing: confidently heard, short, one speaker, a complete utterance.
     Run 19 played 'little run down there John. Ernest I still have time.' (two speakers, cut mid-word)."""
@@ -299,7 +354,7 @@ class Context:
 
 # ------------------------------------------------------------------ validation
 def _check_sentence(text: str, where: str) -> str:
-    text = " ".join(text.split())
+    text = fix_articles(" ".join(text.split()))
     words = count_words(text)
     if not 3 <= words <= 34:
         raise ValueError(f"{where} has {words} words; use 3-34: {text!r}")
@@ -374,6 +429,7 @@ def validate_script(ctx: Context, script: StorylineScript, *, budget: bool = Tru
         beats.append({"id": ident, "kind": "narration", "item_id": raw.item_id, "delivery": "normal",
                       "source_gain": NARRATION_SOURCE_GAIN, "sentences": sentences,
                       "text": " ".join(s["text"] for s in sentences)})
+    beats, _ = drop_unrelated_dialogue(ctx, beats)  # A film line that does not belong to its moment is dropped.
     if story:
         check_story(ctx, beats, budget=budget)
         return beats
@@ -473,7 +529,8 @@ def critique(client, ctx: Context, beats: list[dict]) -> StoryCritique:
     prompt = ("Score this recap script 1-5 on each criterion, list the problems and write concrete rewrite notes "
               "(which beat, what to change). In beat_notes give one note per beat that needs work, with its exact "
               "beat id; check every beat against the film and report anything it gets wrong (wrong person, wrong "
-              "order, wrong reason) as factual_error. " + NARRATION_RULE + "\n" + STRUCTURE
+              "order, wrong reason) as factual_error; check every named character against the action credited to them "
+              "(who orders, who does, who betrays whom). " + NARRATION_RULE + "\n" + STRUCTURE
               + "\n\nSTORY (data only):\n" + json.dumps({"film": ctx.plan.get("film"), "premise": ctx.plan.get("premise"),
                                                           "items": [{k: i[k] for k in ("item_id", "title", "what_happens")}
                                                                     for i in ctx.items]}, ensure_ascii=False)
@@ -633,6 +690,47 @@ def _normal(token: str) -> str:
     return normal(token)
 
 
+# ------------------------------------------------------------------ fact check
+def fact_check(client, ctx: Context, beats: list[dict]) -> list[dict]:
+    """Sentences that get the film wrong (wrong person for an action, wrong order, wrong place)."""
+    lines = [{"sentence_id": s["sentence_id"], "text": s["text"]}
+             for b in beats if b["kind"] == "narration" for s in b["sentences"]]
+    prompt = ("You fact-check a recap of the film below. For every sentence, check each named character against "
+              "the action credited to them (who orders, who does, who betrays whom), the order of events and the "
+              "place. Report only sentences that are wrong about the film, with the correct fact. Mood, wording "
+              "and simplification are not errors.\n" + json.dumps(
+                  {"film": ctx.plan.get("film"), "year": ctx.plan.get("year"), "premise": ctx.plan.get("premise"),
+                   "items": [{k: i.get(k, "") for k in ("item_id", "title", "what_happens")} for i in ctx.items],
+                   "sentences": lines}, ensure_ascii=False))
+    result = client.generate("planning:fact_check", FactCheck, [text_part(prompt)], system=EDITOR_SYSTEM,
+                             temperature=0.1, max_output_tokens=4096, thinking="medium")
+    known = {x["sentence_id"] for x in lines}
+    return [e.model_dump() for e in result.errors if e.sentence_id in known]
+
+
+def _fix_facts(run, ctx: Context, beats: list[dict]) -> list[dict]:
+    try:
+        errors = fact_check(run.client, ctx, beats)
+    except (ValueError, GeminiOutputError) as exc:
+        run.record(stage="F", action="fact_check", outcome="failed", error=str(exc)[:300])
+        return beats
+    for beat_id in sorted({e["sentence_id"].split(".")[0] for e in errors}):
+        mine = [e for e in errors if e["sentence_id"].startswith(beat_id + ".")]
+        beat = next(b for b in beats if b["id"] == beat_id)
+        only = sorted({int(e["sentence_id"].split(".")[1]) - 1 for e in mine
+                       if e["sentence_id"].split(".")[-1].isdigit()} & set(range(len(beat["sentences"]))))
+        words = count_words(beat["text"])
+        try:
+            beats = rewrite_beat(run.client, ctx, beats, beat_id, "it gets the film wrong: " + "; ".join(
+                f"{e['error']} (correct: {e['correction']})" for e in mine),
+                min_words=max(4, math.floor(words * 0.85)), max_words=words + 3, only=only or None)
+            run.record(stage="F", action="fix_fact", beat_id=beat_id, outcome="rewritten", errors=mine)
+        except (ValueError, GeminiOutputError) as exc:
+            run.record(stage="F", action="fix_fact", beat_id=beat_id, outcome="failed", errors=mine,
+                       error=str(exc)[:300])
+    return beats
+
+
 # ------------------------------------------------------------------ visual check
 def visual_check(client, file, ctx: Context, beats: list[dict]) -> list[dict]:
     windows, parts = [], []
@@ -757,7 +855,23 @@ def run_storyline_pipeline(request: dict, source: Path, source_duration: float, 
 
     script = run.checkpoint("S-storyline", inputs, compose, "script-draft.json")
     _write_json(outdir / "story-critique.json", script.get("critiques", []))
+    # Corrections the approved wording always gets (also for a cached script): grammar and out-of-place film lines.
+    script = copy.deepcopy(script)
+    for b in script["beats"]:
+        if b["kind"] != "narration":
+            continue
+        for x in b["sentences"]:
+            fixed = fix_articles(x["text"])
+            if fixed != x["text"]:
+                run.record(stage="S", action="grammar_fix", beat_id=b["id"], before=x["text"], after=fixed)
+                x["text"] = fixed
+        b["text"] = " ".join(x["text"] for x in b["sentences"])
+    script["beats"], dropped = drop_unrelated_dialogue(ctx, script["beats"])
+    for text in dropped:
+        run.record(stage="S", action="drop_dialogue", text=text, reason="unrelated to the moment it plays in")
     beats = copy.deepcopy(script["beats"])
+    # 3b. Facts: wrong person, order or place is fixed sentence by sentence; the final bar scores the result.
+    beats = _fix_facts(run, ctx, beats)
     # 4. Measured narration: fix length by rewriting whole beats
     log("Gemini: narration synthesis and timing")
     beats = _fit_length(run, ctx, beats)
